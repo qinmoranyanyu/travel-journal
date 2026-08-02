@@ -120,41 +120,45 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             total_items=len(selected),
             message=f"正在生成第 1/{len(selected)} 张手绘照片",
         )
-        semaphore = asyncio.Semaphore(settings.image_generation_concurrency)
-        generated_count = 0
+        generation_attempted = False
         attempt_errors: dict[str, Exception] = {}
-        progress_lock = asyncio.Lock()
 
-        async def generate_photo(photo: MediaPhoto) -> None:
+        async def generate_photo(photo: MediaPhoto, waiting_message: str) -> None:
+            nonlocal generation_attempted
+            if generation_attempted and settings.image_generation_interval_seconds > 0:
+                manager.update(job, message=waiting_message)
+                await asyncio.sleep(settings.image_generation_interval_seconds)
+            generation_attempted = True
             raw_path = job.workspace / "generated" / f"{photo.id}.png"
             final_path = photos_dir / f"{photo.id}.jpg"
-            async with semaphore:
-                await asyncio.to_thread(
-                    service.generate_revival,
-                    photo,
-                    photo.caption,
-                    raw_path,
-                )
-                await asyncio.to_thread(normalize_generated_page, raw_path, final_path)
-                photo.generated_path = final_path
+            await asyncio.to_thread(
+                service.generate_revival,
+                photo,
+                photo.caption,
+                raw_path,
+            )
+            await asyncio.to_thread(normalize_generated_page, raw_path, final_path)
+            photo.generated_path = final_path
 
-        async def generate_one(photo: MediaPhoto) -> None:
-            nonlocal generated_count
+        for index, photo in enumerate(selected):
             try:
-                await generate_photo(photo)
+                await generate_photo(
+                    photo,
+                    (
+                        f"等待 {settings.image_generation_interval_seconds:g} 秒后生成"
+                        f"第 {index + 1}/{len(selected)} 张照片"
+                    ),
+                )
             except Exception as exc:  # Keep completed images when one provider request fails.
                 attempt_errors[photo.id] = exc
-            finally:
-                async with progress_lock:
-                    generated_count += 1
-                    manager.update(
-                        job,
-                        completed_items=generated_count,
-                        progress=50 + 38 * generated_count / len(selected),
-                        message=f"已生成 {generated_count}/{len(selected)} 张手绘照片",
-                    )
+            completed = index + 1
+            manager.update(
+                job,
+                completed_items=completed,
+                progress=50 + 38 * completed / len(selected),
+                message=f"已处理 {completed}/{len(selected)} 张手绘照片",
+            )
 
-        await asyncio.gather(*(generate_one(photo) for photo in selected))
         retry_photos = [
             photo
             for photo in selected
@@ -173,7 +177,13 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             )
             for index, photo in enumerate(retry_photos):
                 try:
-                    await generate_photo(photo)
+                    await generate_photo(
+                        photo,
+                        (
+                            f"等待 {settings.image_generation_interval_seconds:g} 秒后重试"
+                            f"第 {index + 1}/{len(retry_photos)} 张照片"
+                        ),
+                    )
                 except Exception as exc:
                     retry_errors[photo.id] = exc
                 manager.update(
@@ -235,6 +245,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             ),
             error="\n".join(errors) or None,
             output_url=f"/albums/{folder}/index.html",
+            share_url=f"/albums/{folder}/share.html",
             zip_url=f"/albums/{folder}/{folder}.zip",
             export_urls=[f"/albums/{folder}/{item}" for item in exports],
         )

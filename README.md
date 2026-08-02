@@ -12,6 +12,7 @@ OPENAI_BASE_URL=https://www.hellotranfer.top/
 OPENAI_API_KEY=你的密钥
 OPENAI_TEXT_MODEL=支持图片理解的文本模型
 OPENAI_IMAGE_MODEL=gpt-image-1
+IMAGE_GENERATION_INTERVAL_SECONDS=10
 ```
 
 3. 运行 `start.bat`，浏览器会打开 <http://127.0.0.1:8000>。
@@ -31,7 +32,7 @@ exports/                朋友圈章节长图
 <旅行名称>.zip          不含 sources 的分享包
 ```
 
-同一时间只执行一个生成任务。刷新或关闭浏览器不会停止任务；停止 FastAPI 后，未完成任务会标记为中断，不会自动续跑。
+同一时间只执行一个相册任务，入选照片也会逐张串行生成。`IMAGE_GENERATION_INTERVAL_SECONDS` 控制相邻两次图片请求之间的等待秒数。刷新或关闭浏览器不会停止任务；停止 FastAPI 后，未完成任务会标记为中断，不会自动续跑。
 
 ## 测试
 

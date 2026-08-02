@@ -21,7 +21,7 @@ class Settings(BaseModel):
     openai_api_key: str = ""
     openai_text_model: str = ""
     openai_image_model: str = "gpt-image-1"
-    image_generation_concurrency: int = 2
+    image_generation_interval_seconds: float = 10.0
     vision_batch_size: int = 4
 
     @property
@@ -61,8 +61,8 @@ def get_settings() -> Settings:
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         openai_text_model=os.getenv("OPENAI_TEXT_MODEL", ""),
         openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"),
-        image_generation_concurrency=max(
-            1, int(os.getenv("IMAGE_GENERATION_CONCURRENCY", "2"))
+        image_generation_interval_seconds=max(
+            0.0, float(os.getenv("IMAGE_GENERATION_INTERVAL_SECONDS", "10"))
         ),
         vision_batch_size=max(1, int(os.getenv("VISION_BATCH_SIZE", "4"))),
     )
