@@ -48,6 +48,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .dropzone__empty span { font-size: 12px; }
 .dropzone__actions { display: flex; justify-content: center; gap: 10px; }
 .dropzone__actions button, .result-actions a { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: var(--ink); background: var(--paper); border: 1px solid #b9c4be; border-radius: 4px; text-decoration: none; cursor: pointer; }
+.dropzone__actions button:disabled { color: #8d9992; background: #e8ece9; cursor: not-allowed; }
 .contact-sheet { align-self: stretch; min-height: 220px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 105px; gap: 7px; }
 .contact-sheet__item { position: relative; min-width: 0; min-height: 0; overflow: hidden; contain: layout paint; content-visibility: auto; contain-intrinsic-size: auto 105px; background: #dce3df; }
 .photo-preview { width: 100%; height: 100%; padding: 0; display: block; background: transparent; border: 0; cursor: zoom-in; }
@@ -81,6 +82,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .field input, .field textarea { width: 100%; padding: 11px 12px; color: var(--ink); background: #fff; border: 1px solid #cbd3ce; border-radius: 3px; resize: vertical; }
 .field input { height: 44px; }
 .field input::placeholder, .field textarea::placeholder { color: #98a29c; }
+.field input:disabled, .field textarea:disabled { color: #4f5b54; background: #eef2ef; border-color: #d7ddd9; cursor: default; }
 .input-with-icon { position: relative; }
 .input-with-icon svg { position: absolute; top: 14px; left: 12px; color: var(--moss); pointer-events: none; }
 .input-with-icon input { padding-left: 38px; }
@@ -104,6 +106,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .task-message { margin-top: 22px; padding-top: 18px; display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid #435249; }
 .task-message strong { font-size: 13px; line-height: 1.6; }
 .task-message span { flex: none; color: #94a59c; font: 12px/1.6 "Segoe UI", sans-serif; }
+.retry-status { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #b8c6bf; font-size: 12px; }
+.retry-status strong { color: #ffd1c7; font-size: 12px; }
+.task-controls { margin-top: 16px; display: flex; gap: 8px; }
+.task-control { min-height: 40px; padding: 0 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: white; background: #3d5046; border: 1px solid #61766a; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.task-control:hover { background: #4b6055; }
+.task-control--danger { background: #72372d; border-color: #a15a4d; }
+.task-control--danger:hover { background: #8a4033; }
+.task-control:disabled { opacity: .55; cursor: wait; }
 .task-panel .task-error { color: #ffd9d1; background: #5a2a23; }
 .result-actions { margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .result-actions a { color: white; background: #35453d; border-color: #52645a; font-size: 13px; }

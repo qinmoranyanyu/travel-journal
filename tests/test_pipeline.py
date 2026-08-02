@@ -60,7 +60,7 @@ class FlakyImageService:
 
     def generate_revival(self, photo, caption, output_path: Path):
         type(self).generation_calls += 1
-        if self.generation_calls == 1:
+        if self.generation_calls <= 3:
             raise APIConnectionError(request=httpx.Request("POST", "https://example.test"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (30, 40), "white").save(output_path)
@@ -75,6 +75,36 @@ class StableImageService(FlakyImageService):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (30, 40), "white").save(output_path)
         return output_path
+
+
+class AlwaysFailImageService(FlakyImageService):
+    generation_calls = 0
+
+    def generate_revival(self, photo, caption, output_path: Path):
+        type(self).generation_calls += 1
+        raise APIConnectionError(request=httpx.Request("POST", "https://example.test"))
+
+
+class StopWhenRetryStartsManager(RecordingManager):
+    def update(self, job: Job, **changes) -> None:
+        super().update(job, **changes)
+        if changes.get("stage") == "generation_retry":
+            job.snapshot.retry_stop_requested = True
+            job.stop_retry_event.set()
+
+
+class NoCallService:
+    def __init__(self, settings: Settings) -> None:
+        pass
+
+    def analyze_photos(self, photos):
+        raise AssertionError("analysis checkpoint was not restored")
+
+    def create_story(self, photos, context):
+        raise AssertionError("story checkpoint was not restored")
+
+    def generate_revival(self, photo, caption, output_path: Path):
+        raise AssertionError("completed image was generated again")
 
 
 def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
@@ -118,11 +148,19 @@ def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
 
     asyncio.run(pipeline.run_pipeline(job, RecordingManager(), settings))
 
-    assert FlakyImageService.generation_calls == 2
+    assert FlakyImageService.generation_calls == 4
     assert job.snapshot.status == JobStatus.completed
     assert not job.snapshot.error
     generated = list((tmp_path / "outputs").glob("*/assets/photos/photo-00001.jpg"))
     assert len(generated) == 1
+
+    output_folder = job.pipeline_state["output_folder"]
+    monkeypatch.setattr(pipeline, "OpenAIService", NoCallService)
+    asyncio.run(pipeline.run_pipeline(job, RecordingManager(), settings))
+
+    assert job.snapshot.status == JobStatus.completed
+    assert job.pipeline_state["output_folder"] == output_folder
+    assert len(list((tmp_path / "outputs").glob("*/assets/photos/photo-00001.jpg"))) == 1
 
 
 def test_pipeline_generates_serially_with_configured_interval(monkeypatch, tmp_path):
@@ -179,3 +217,52 @@ def test_pipeline_generates_serially_with_configured_interval(monkeypatch, tmp_p
     assert StableImageService.generated_photo_ids == ["photo-00001", "photo-00002"]
     assert sleep_calls == [2.5]
     assert job.snapshot.status == JobStatus.completed
+
+
+def test_pipeline_stops_retry_loop_and_uses_original_fallback(monkeypatch, tmp_path):
+    workspace = tmp_path / ".jobs" / "job-stop"
+    uploads = workspace / "uploads"
+    uploads.mkdir(parents=True)
+    (workspace / "analysis").mkdir()
+    (workspace / "generation").mkdir()
+    source = uploads / "00000-photo.jpg"
+    Image.new("RGB", (100, 80), "white").save(source)
+
+    settings = Settings(
+        output_dir=tmp_path / "outputs",
+        job_dir=tmp_path / ".jobs",
+        openai_api_key="test",
+        openai_text_model="test",
+        image_generation_interval_seconds=0,
+    )
+    settings.ensure_directories()
+    job = Job(
+        snapshot=JobSnapshot(id="job-stop"),
+        album_input=AlbumInput(title="fallback album", target_count=1),
+        workspace=workspace,
+        uploads=[
+            {
+                "id": "photo-00001",
+                "original_name": "photo.jpg",
+                "path": str(source),
+                "order": 0,
+                "modified_at": None,
+            }
+        ],
+    )
+    AlwaysFailImageService.generation_calls = 0
+    monkeypatch.setattr(pipeline, "OpenAIService", AlwaysFailImageService)
+
+    async def skip_share_export(output_dir):
+        return []
+
+    monkeypatch.setattr(pipeline, "export_share_images", skip_share_export)
+
+    asyncio.run(pipeline.run_pipeline(job, StopWhenRetryStartsManager(), settings))
+
+    assert AlwaysFailImageService.generation_calls == 1
+    assert job.snapshot.status == JobStatus.partial
+    assert job.snapshot.failed_items == 1
+    assert "使用原图" in (job.snapshot.error or "")
+    generated = list((tmp_path / "outputs").glob("*/assets/photos/photo-00001.jpg"))
+    assert len(generated) == 1
