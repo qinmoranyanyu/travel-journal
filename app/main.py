@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .jobs import JobManager
 from .media import is_supported, safe_filename
-from .models import AlbumInput, JobDetail, JobSnapshot, JobUpload, TERMINAL_STATUSES
+from .models import AlbumInput, JobDetail, JobListItem, JobSnapshot, JobUpload, TERMINAL_STATUSES
 from .pipeline import run_pipeline
 from .rendering import create_share_zip
 
@@ -27,8 +27,6 @@ manager = JobManager(settings)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    for job in manager.pending_resumes():
-        job.task = asyncio.create_task(run_pipeline(job, manager, settings))
     try:
         yield
     finally:
@@ -76,6 +74,19 @@ async def current_job_detail() -> JobDetail | None:
     return _job_detail(job) if job else None
 
 
+@app.get("/api/jobs", response_model=list[JobListItem])
+async def list_jobs() -> list[JobListItem]:
+    return [_job_list_item(job) for job in manager.list_jobs()]
+
+
+@app.get("/api/jobs/{job_id}/detail", response_model=JobDetail)
+async def job_detail(job_id: str) -> JobDetail:
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return _job_detail(job)
+
+
 @app.get("/api/jobs/{job_id}", response_model=JobSnapshot)
 async def get_job(job_id: str) -> JobSnapshot:
     job = manager.get(job_id)
@@ -100,15 +111,28 @@ async def job_photo(job_id: str, photo_id: str) -> FileResponse:
     return FileResponse(photo_path, filename=upload["original_name"])
 
 
+@app.post("/api/jobs/{job_id}/start", response_model=JobSnapshot, status_code=202)
 @app.post("/api/jobs/{job_id}/resume", response_model=JobSnapshot, status_code=202)
-async def resume_job(job_id: str) -> JobSnapshot:
+async def start_job(job_id: str) -> JobSnapshot:
     try:
-        job = await manager.prepare_resume(job_id)
+        job = await manager.prepare_start(job_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="任务不存在") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     job.task = asyncio.create_task(run_pipeline(job, manager, settings))
+    return job.snapshot
+
+
+@app.post("/api/jobs/{job_id}/pause", response_model=JobSnapshot)
+async def pause_job(job_id: str) -> JobSnapshot:
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    try:
+        manager.request_pause(job)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return job.snapshot
 
 
@@ -199,10 +223,7 @@ async def create_job(
         target_count=target_count,
     )
     job_id = uuid.uuid4().hex
-    try:
-        job = await manager.create(job_id, album_input)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job = await manager.create(job_id, album_input)
 
     try:
         for order, upload in enumerate(supported):
@@ -230,7 +251,6 @@ async def create_job(
         for upload in photos:
             await upload.close()
 
-    job.task = asyncio.create_task(run_pipeline(job, manager, settings))
     return job.snapshot
 
 
@@ -255,6 +275,20 @@ def _job_detail(job) -> JobDetail:
             )
             for upload in sorted(job.uploads, key=lambda item: item["order"])
         ],
+    )
+
+
+def _job_list_item(job) -> JobListItem:
+    first_upload = min(job.uploads, key=lambda upload: upload["order"], default=None)
+    return JobListItem(
+        snapshot=job.snapshot,
+        album_input=job.album_input,
+        upload_count=len(job.uploads),
+        preview_url=(
+            f"/api/jobs/{job.snapshot.id}/photos/{first_upload['id']}"
+            if first_upload
+            else None
+        ),
     )
 
 

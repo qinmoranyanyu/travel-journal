@@ -15,17 +15,17 @@ import {
   LoaderCircle,
   MapPin,
   Maximize2,
+  Pause,
   Play,
-  RotateCcw,
+  Plus,
   Share2,
-  Sparkles,
   Upload,
   X
 } from "lucide-react";
 import { api, submitAlbum } from "./api";
-import type { AlbumSummary, Health, JobSnapshot, JobUpload } from "./types";
+import type { AlbumSummary, Health, JobDetail, JobListItem, JobSnapshot, JobUpload } from "./types";
 
-const terminalStatuses = new Set(["completed", "partial", "failed", "interrupted"]);
+const terminalStatuses = new Set(["paused", "completed", "partial", "failed", "interrupted"]);
 const previewLimit = 8;
 const stages = [
   { id: "metadata", label: "整理时间" },
@@ -53,6 +53,8 @@ const stageRanks: Record<string, number> = {
 function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [job, setJob] = useState<JobSnapshot | null>(null);
+  const [jobs, setJobs] = useState<JobListItem[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [restoredUploads, setRestoredUploads] = useState<JobUpload[]>([]);
@@ -71,10 +73,7 @@ function App() {
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
 
-  const active = Boolean(job && !terminalStatuses.has(job.status));
-  const resumable = job?.status === "failed" || job?.status === "interrupted";
-  const taskLocked = active || resumable;
-  const formLocked = taskLocked || showingCurrentTask;
+  const formLocked = showingCurrentTask;
   const localPreviews = useMemo(
     () => files.map((file) => ({
       key: `${file.name}-${file.size}-${file.lastModified}`,
@@ -102,22 +101,29 @@ function App() {
   );
 
   useEffect(() => {
-    Promise.all([api.health(), api.currentDetail(), api.albums()])
-      .then(([healthData, currentDetail, albumData]) => {
+    Promise.all([api.health(), api.currentDetail(), api.jobs(), api.albums()])
+      .then(([healthData, currentDetail, jobItems, albumData]) => {
         setHealth(healthData);
-        setJob(currentDetail?.snapshot || null);
+        setJobs(jobItems);
         setAlbums(albumData);
         if (currentDetail) {
-          setTitle(currentDetail.album_input.title);
-          setLocation(currentDetail.album_input.location);
-          setCompanions(currentDetail.album_input.companions);
-          setMemory(currentDetail.album_input.memory);
-          setTargetCount(currentDetail.album_input.target_count);
-          setRestoredUploads(currentDetail.uploads);
-          setShowingCurrentTask(true);
+          hydrateJobDetail(currentDetail);
         }
       })
       .catch((reason: Error) => setError(reason.message));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      api.jobs().then((items) => {
+        setJobs(items);
+        setJob((current) => {
+          if (!current) return current;
+          return items.find((item) => item.snapshot.id === current.id)?.snapshot || current;
+        });
+      }).catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -126,14 +132,36 @@ function App() {
     events.onmessage = (event) => {
       const next = JSON.parse(event.data) as JobSnapshot;
       setJob(next);
+      setJobs((items) => items.map((item) => (
+        item.snapshot.id === next.id ? { ...item, snapshot: next } : item
+      )));
       if (terminalStatuses.has(next.status)) {
         events.close();
-        api.albums().then(setAlbums).catch(() => undefined);
+        Promise.all([api.albums(), api.jobs()])
+          .then(([albumItems, jobItems]) => {
+            setAlbums(albumItems);
+            setJobs(jobItems);
+          })
+          .catch(() => undefined);
       }
     };
     events.onerror = () => events.close();
     return () => events.close();
   }, [job?.id, job?.status]);
+
+  function hydrateJobDetail(detail: JobDetail) {
+    setJob(detail.snapshot);
+    setSelectedJobId(detail.snapshot.id);
+    setTitle(detail.album_input.title);
+    setLocation(detail.album_input.location);
+    setCompanions(detail.album_input.companions);
+    setMemory(detail.album_input.memory);
+    setTargetCount(detail.album_input.target_count);
+    setFiles([]);
+    setRestoredUploads(detail.uploads);
+    setShowAllPhotos(false);
+    setShowingCurrentTask(true);
+  }
 
   function addFiles(nextFiles: File[]) {
     if (formLocked) return;
@@ -181,8 +209,9 @@ function App() {
     );
     try {
       const snapshot = await submitAlbum(data, setUploadProgress);
-      setJob(snapshot);
-      setShowingCurrentTask(true);
+      const [detail, jobItems] = await Promise.all([api.jobDetail(snapshot.id), api.jobs()]);
+      hydrateJobDetail(detail);
+      setJobs(jobItems);
       setUploadProgress(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "任务提交失败");
@@ -192,10 +221,12 @@ function App() {
     }
   }
 
-  function resetForm() {
+  function startNewTask() {
     setFiles([]);
     setRestoredUploads([]);
     setShowingCurrentTask(false);
+    setJob(null);
+    setSelectedJobId(null);
     setTitle("");
     setLocation("");
     setCompanions("");
@@ -205,14 +236,47 @@ function App() {
     setError("");
   }
 
-  const resumeCurrentJob = useCallback(async () => {
+  const selectJob = useCallback(async (jobId: string) => {
+    setTaskActionPending(true);
+    setError("");
+    try {
+      hydrateJobDetail(await api.jobDetail(jobId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "任务加载失败");
+    } finally {
+      setTaskActionPending(false);
+    }
+  }, []);
+
+  const startCurrentJob = useCallback(async () => {
     if (!job) return;
     setTaskActionPending(true);
     setError("");
     try {
-      setJob(await api.resume(job.id));
+      const snapshot = await api.start(job.id);
+      setJob(snapshot);
+      setJobs((items) => items.map((item) => (
+        item.snapshot.id === snapshot.id ? { ...item, snapshot } : item
+      )));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "任务继续失败");
+      setError(reason instanceof Error ? reason.message : "任务开始失败");
+    } finally {
+      setTaskActionPending(false);
+    }
+  }, [job?.id]);
+
+  const pauseCurrentJob = useCallback(async () => {
+    if (!job) return;
+    setTaskActionPending(true);
+    setError("");
+    try {
+      const snapshot = await api.pause(job.id);
+      setJob(snapshot);
+      setJobs((items) => items.map((item) => (
+        item.snapshot.id === snapshot.id ? { ...item, snapshot } : item
+      )));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "任务暂停失败");
     } finally {
       setTaskActionPending(false);
     }
@@ -252,7 +316,7 @@ function App() {
         <section className="composer" aria-labelledby="new-album-title">
           <div className="section-heading">
             <div><span>{showingCurrentTask ? "CURRENT VOLUME" : "NEW VOLUME"}</span><h2 id="new-album-title">{showingCurrentTask ? "当前任务资料" : "新建旅行手记"}</h2></div>
-            {selectedPhotoCount > 0 && <button className="quiet-button" type="button" onClick={resetForm} disabled={taskLocked}><RotateCcw size={16} />清空</button>}
+            <button className="quiet-button" type="button" onClick={startNewTask}><Plus size={16} />新建任务</button>
           </div>
 
           <form onSubmit={handleSubmit}>
@@ -299,23 +363,28 @@ function App() {
 
             {error && <div className="form-error">{error}</div>}
             <button className="primary-button" type="submit" disabled={formLocked || submitting || !files.length || !title.trim() || !health?.api_configured}>
-              {submitting ? <LoaderCircle className="spin" size={19} /> : <Sparkles size={19} />}
+              {submitting ? <LoaderCircle className="spin" size={19} /> : <Plus size={19} />}
               {uploadProgress !== null
                 ? `正在上传 ${Math.round(uploadProgress)}%`
-                : active
-                  ? "当前任务进行中"
-                  : showingCurrentTask
-                    ? "当前任务资料已恢复"
-                    : "开始生成手记"}
+                : showingCurrentTask
+                  ? "当前任务资料已保存"
+                  : "创建任务"}
             </button>
           </form>
         </section>
 
         <aside className="status-column">
+          <TaskIndex
+            jobs={jobs}
+            selectedJobId={selectedJobId}
+            loading={taskActionPending}
+            onSelect={selectJob}
+          />
           <TaskProgress
             job={job}
             actionPending={taskActionPending}
-            onResume={resumeCurrentJob}
+            onStart={startCurrentJob}
+            onPause={pauseCurrentJob}
             onStopRetries={stopGenerationRetries}
           />
           <AlbumHistory albums={albums} />
@@ -522,18 +591,81 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
   );
 });
 
+const jobStatusLabels: Record<JobSnapshot["status"], string> = {
+  queued: "准备中",
+  running: "运行中",
+  paused: "已暂停",
+  completed: "已完成",
+  partial: "部分完成",
+  failed: "失败",
+  interrupted: "已中断"
+};
+
+const TaskIndex = memo(function TaskIndex({
+  jobs,
+  selectedJobId,
+  loading,
+  onSelect
+}: {
+  jobs: JobListItem[];
+  selectedJobId: string | null;
+  loading: boolean;
+  onSelect: (jobId: string) => void;
+}) {
+  return (
+    <section className="task-index" aria-labelledby="task-index-title">
+      <div className="section-heading task-index__heading">
+        <div><span>JOB INDEX</span><h2 id="task-index-title">任务索引</h2></div>
+        <strong>{jobs.length}</strong>
+      </div>
+      {jobs.length === 0 ? (
+        <p className="task-index__empty">创建的任务会保存在这里</p>
+      ) : (
+        <div className="task-index__list">
+          {jobs.map((item) => {
+            const selected = item.snapshot.id === selectedJobId;
+            return (
+              <button
+                className={`task-index__item ${selected ? "is-selected" : ""}`}
+                type="button"
+                key={item.snapshot.id}
+                onClick={() => onSelect(item.snapshot.id)}
+                disabled={loading && !selected}
+                aria-current={selected ? "true" : undefined}
+              >
+                {item.preview_url
+                  ? <img src={item.preview_url} alt="" loading="lazy" decoding="async" />
+                  : <span className="task-index__blank"><Images size={17} /></span>}
+                <span className="task-index__copy">
+                  <strong>{item.album_input.title}</strong>
+                  <small>{item.upload_count} 张 · {new Date(item.snapshot.updated_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</small>
+                </span>
+                <span className={`task-status task-status--${item.snapshot.status}`}>{jobStatusLabels[item.snapshot.status]}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+});
+
 const TaskProgress = memo(function TaskProgress({
   job,
   actionPending,
-  onResume,
+  onStart,
+  onPause,
   onStopRetries
 }: {
   job: JobSnapshot | null;
   actionPending: boolean;
-  onResume: () => void;
+  onStart: () => void;
+  onPause: () => void;
   onStopRetries: () => void;
 }) {
   const rank = job ? (stageRanks[job.stage] ?? 0) : -1;
+  const canStart = job?.status === "paused" || job?.status === "failed" || job?.status === "interrupted";
+  const canPause = job?.status === "running";
   return (
     <section className="task-panel" aria-labelledby="task-title">
       <div className="section-heading section-heading--dark">
@@ -541,14 +673,14 @@ const TaskProgress = memo(function TaskProgress({
         {job && <strong>{Math.round(job.progress)}%</strong>}
       </div>
       {!job ? (
-        <div className="task-empty"><span className="empty-frame" /><p>还没有正在制作的相册</p></div>
+        <div className="task-empty"><span className="empty-frame" /><p>从任务索引选择任务，或新建任务</p></div>
       ) : (
         <>
           <div className="film-progress" style={{ "--progress": `${job.progress}%` } as React.CSSProperties}>
             <div className="film-progress__fill" />
             {stages.map((stage, index) => (
-              <div className={`film-step ${index < rank || job.status === "completed" ? "is-done" : ""} ${index === rank && !terminalStatuses.has(job.status) ? "is-active" : ""}`} key={stage.id}>
-                <span className="film-step__frame">{index < rank || job.status === "completed" ? <Check size={14} /> : index + 1}</span>
+              <div className={`film-step ${index < rank || job.status === "completed" || job.status === "partial" ? "is-done" : ""} ${index === rank && !terminalStatuses.has(job.status) ? "is-active" : ""}`} key={stage.id}>
+                <span className="film-step__frame">{index < rank || job.status === "completed" || job.status === "partial" ? <Check size={14} /> : index + 1}</span>
                 <span>{stage.label}</span>
               </div>
             ))}
@@ -563,7 +695,7 @@ const TaskProgress = memo(function TaskProgress({
               <strong>{job.failed_items} 张待成功</strong>
             </div>
           )}
-          {(job.can_stop_retries || job.status === "failed" || job.status === "interrupted") && (
+          {(job.can_stop_retries || canStart || canPause) && (
             <div className="task-controls">
               {job.can_stop_retries && !job.retry_stop_requested && (
                 <button className="task-control task-control--danger" type="button" onClick={onStopRetries} disabled={actionPending}>
@@ -571,10 +703,16 @@ const TaskProgress = memo(function TaskProgress({
                   终止重试并继续
                 </button>
               )}
-              {(job.status === "failed" || job.status === "interrupted") && (
-                <button className="task-control" type="button" onClick={onResume} disabled={actionPending}>
+              {canStart && (
+                <button className="task-control" type="button" onClick={onStart} disabled={actionPending}>
                   {actionPending ? <LoaderCircle className="spin" size={17} /> : <Play size={17} />}
-                  从断点继续
+                  {job.progress > 0 ? "继续执行" : "开始执行"}
+                </button>
+              )}
+              {canPause && (
+                <button className="task-control" type="button" onClick={onPause} disabled={actionPending || job.pause_requested}>
+                  {actionPending || job.pause_requested ? <LoaderCircle className="spin" size={17} /> : <Pause size={17} />}
+                  {job.pause_requested ? "正在暂停" : "暂停任务"}
                 </button>
               )}
             </div>

@@ -1,4 +1,4 @@
-export type JobStatus = "queued" | "running" | "completed" | "partial" | "failed" | "interrupted";
+export type JobStatus = "queued" | "running" | "paused" | "completed" | "partial" | "failed" | "interrupted";
 
 export interface JobSnapshot {
   id: string;
@@ -19,6 +19,7 @@ export interface JobSnapshot {
   retry_stop_requested: boolean;
   retry_round: number;
   failed_items: number;
+  pause_requested: boolean;
 }
 
 export interface AlbumInput {
@@ -41,6 +42,13 @@ export interface JobDetail {
   snapshot: JobSnapshot;
   album_input: AlbumInput;
   uploads: JobUpload[];
+}
+
+export interface JobListItem {
+  snapshot: JobSnapshot;
+  album_input: AlbumInput;
+  upload_count: number;
+  preview_url?: string | null;
 }
 
 export interface AlbumSummary {

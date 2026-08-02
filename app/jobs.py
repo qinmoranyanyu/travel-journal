@@ -27,6 +27,7 @@ class Job:
     pipeline_state: dict[str, Any] = field(default_factory=dict)
     task: asyncio.Task[None] | None = None
     stop_retry_event: asyncio.Event = field(default_factory=asyncio.Event)
+    pause_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class JobManager:
@@ -39,15 +40,17 @@ class JobManager:
 
     async def create(self, job_id: str, album_input: AlbumInput) -> Job:
         async with self._lock:
-            active = self.current()
-            if active and active.snapshot.status not in TERMINAL_STATUSES:
-                raise RuntimeError("当前已有相册正在生成")
             workspace = self.settings.job_dir / job_id
             (workspace / "uploads").mkdir(parents=True, exist_ok=False)
             (workspace / "analysis").mkdir()
             (workspace / "generation").mkdir()
             job = Job(
-                snapshot=JobSnapshot(id=job_id),
+                snapshot=JobSnapshot(
+                    id=job_id,
+                    status=JobStatus.paused,
+                    stage="queued",
+                    message="任务已创建，等待手动开始",
+                ),
                 album_input=album_input,
                 workspace=workspace,
             )
@@ -64,33 +67,67 @@ class JobManager:
     def get(self, job_id: str) -> Job | None:
         return self.jobs.get(job_id)
 
-    def pending_resumes(self) -> list[Job]:
-        return [
-            job
-            for job in self.jobs.values()
-            if job.snapshot.status == JobStatus.queued and job.task is None
-        ]
+    def list_jobs(self) -> list[Job]:
+        return sorted(
+            self.jobs.values(),
+            key=lambda job: job.snapshot.updated_at,
+            reverse=True,
+        )
 
-    async def prepare_resume(self, job_id: str) -> Job:
+    async def prepare_start(self, job_id: str) -> Job:
         async with self._lock:
             job = self.get(job_id)
             if not job:
                 raise KeyError(job_id)
             if job.task and not job.task.done():
                 raise RuntimeError("任务正在运行")
-            if job.snapshot.status not in {JobStatus.failed, JobStatus.interrupted, JobStatus.queued}:
-                raise RuntimeError("当前任务不能继续")
+            active = next(
+                (
+                    other
+                    for other in self.jobs.values()
+                    if other.snapshot.id != job_id
+                    and other.snapshot.status in {JobStatus.queued, JobStatus.running}
+                ),
+                None,
+            )
+            if active:
+                raise RuntimeError(f"请先暂停正在运行的任务：{active.album_input.title}")
+            if job.snapshot.status not in {
+                JobStatus.paused,
+                JobStatus.failed,
+                JobStatus.interrupted,
+                JobStatus.queued,
+            }:
+                raise RuntimeError("当前任务不能开始")
             if not job.snapshot.retry_stop_requested:
                 job.stop_retry_event.clear()
+            job.pause_event.clear()
             self.update(
                 job,
                 status=JobStatus.queued,
                 message=f"准备从 {job.snapshot.stage} 阶段继续",
                 error=None,
                 can_stop_retries=False,
+                pause_requested=False,
             )
             self.current_job_id = job.snapshot.id
             return job
+
+    async def prepare_resume(self, job_id: str) -> Job:
+        return await self.prepare_start(job_id)
+
+    def request_pause(self, job: Job) -> None:
+        if job.snapshot.status != JobStatus.running or not job.task or job.task.done():
+            raise RuntimeError("当前任务没有在运行")
+        if job.snapshot.pause_requested:
+            raise RuntimeError("任务正在暂停")
+        job.pause_event.set()
+        self.update(
+            job,
+            pause_requested=True,
+            can_stop_retries=False,
+            message="已请求暂停，当前步骤结束后保存断点",
+        )
 
     def request_stop_retries(self, job: Job) -> None:
         if not job.snapshot.can_stop_retries or job.snapshot.retry_stop_requested:
@@ -178,9 +215,10 @@ class JobManager:
                 data = json.loads(state_path.read_text(encoding="utf-8"))
                 snapshot = JobSnapshot.model_validate(data["snapshot"])
                 if snapshot.status not in TERMINAL_STATUSES:
-                    snapshot.status = JobStatus.queued
+                    snapshot.status = JobStatus.paused
                     snapshot.can_stop_retries = False
-                    snapshot.message = f"检测到未完成任务，将从 {snapshot.stage} 阶段继续"
+                    snapshot.pause_requested = False
+                    snapshot.message = f"服务曾在运行中停止，可从 {snapshot.stage} 阶段继续"
                     snapshot.updated_at = utc_now()
                 job = Job(
                     snapshot=snapshot,

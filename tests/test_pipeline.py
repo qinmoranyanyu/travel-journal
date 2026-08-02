@@ -266,3 +266,42 @@ def test_pipeline_stops_retry_loop_and_uses_original_fallback(monkeypatch, tmp_p
     assert "使用原图" in (job.snapshot.error or "")
     generated = list((tmp_path / "outputs").glob("*/assets/photos/photo-00001.jpg"))
     assert len(generated) == 1
+
+
+def test_pipeline_honors_pause_request_before_next_checkpoint(tmp_path):
+    workspace = tmp_path / ".jobs" / "job-pause"
+    uploads = workspace / "uploads"
+    uploads.mkdir(parents=True)
+    (workspace / "analysis").mkdir()
+    (workspace / "generation").mkdir()
+    source = uploads / "00000-photo.jpg"
+    Image.new("RGB", (100, 80), "white").save(source)
+    settings = Settings(
+        output_dir=tmp_path / "outputs",
+        job_dir=tmp_path / ".jobs",
+        openai_api_key="test",
+        openai_text_model="test",
+    )
+    settings.ensure_directories()
+    job = Job(
+        snapshot=JobSnapshot(id="job-pause", status=JobStatus.queued),
+        album_input=AlbumInput(title="pause album", target_count=1),
+        workspace=workspace,
+        uploads=[
+            {
+                "id": "photo-00001",
+                "original_name": "photo.jpg",
+                "path": str(source),
+                "order": 0,
+                "modified_at": None,
+            }
+        ],
+    )
+    job.pause_event.set()
+
+    asyncio.run(pipeline.run_pipeline(job, RecordingManager(), settings))
+
+    assert job.snapshot.status == JobStatus.paused
+    assert job.snapshot.stage == "metadata"
+    assert job.snapshot.pause_requested is False
+    assert "任务已暂停" in job.snapshot.message
