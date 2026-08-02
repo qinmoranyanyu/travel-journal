@@ -67,6 +67,16 @@ class FlakyImageService:
         return output_path
 
 
+class StableImageService(FlakyImageService):
+    generated_photo_ids: list[str] = []
+
+    def generate_revival(self, photo, caption, output_path: Path):
+        type(self).generated_photo_ids.append(photo.id)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (30, 40), "white").save(output_path)
+        return output_path
+
+
 def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
     workspace = tmp_path / ".jobs" / "job-one"
     uploads = workspace / "uploads"
@@ -81,6 +91,7 @@ def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
         job_dir=tmp_path / ".jobs",
         openai_api_key="test",
         openai_text_model="test",
+        image_generation_interval_seconds=0,
     )
     settings.ensure_directories()
     job = Job(
@@ -112,3 +123,59 @@ def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
     assert not job.snapshot.error
     generated = list((tmp_path / "outputs").glob("*/assets/photos/photo-00001.jpg"))
     assert len(generated) == 1
+
+
+def test_pipeline_generates_serially_with_configured_interval(monkeypatch, tmp_path):
+    workspace = tmp_path / ".jobs" / "job-two"
+    uploads = workspace / "uploads"
+    uploads.mkdir(parents=True)
+    (workspace / "analysis").mkdir()
+    (workspace / "generation").mkdir()
+    upload_rows = []
+    for index, color in enumerate(("white", "black")):
+        source = uploads / f"{index:05d}-photo-{index}.jpg"
+        Image.new("RGB", (100, 80), color).save(source)
+        upload_rows.append(
+            {
+                "id": f"photo-{index + 1:05d}",
+                "original_name": source.name,
+                "path": str(source),
+                "order": index,
+                "modified_at": None,
+            }
+        )
+
+    settings = Settings(
+        output_dir=tmp_path / "outputs",
+        job_dir=tmp_path / ".jobs",
+        openai_api_key="test",
+        openai_text_model="test",
+        image_generation_interval_seconds=2.5,
+    )
+    settings.ensure_directories()
+    job = Job(
+        snapshot=JobSnapshot(id="job-two"),
+        album_input=AlbumInput(title="serial album", target_count=2),
+        workspace=workspace,
+        uploads=upload_rows,
+    )
+    StableImageService.generated_photo_ids = []
+    monkeypatch.setattr(pipeline, "OpenAIService", StableImageService)
+    monkeypatch.setattr(pipeline, "near_duplicate_representatives", lambda photos: photos)
+
+    sleep_calls: list[float] = []
+
+    async def record_sleep(seconds: float):
+        sleep_calls.append(seconds)
+
+    async def skip_share_export(output_dir):
+        return []
+
+    monkeypatch.setattr(pipeline.asyncio, "sleep", record_sleep)
+    monkeypatch.setattr(pipeline, "export_share_images", skip_share_export)
+
+    asyncio.run(pipeline.run_pipeline(job, RecordingManager(), settings))
+
+    assert StableImageService.generated_photo_ids == ["photo-00001", "photo-00002"]
+    assert sleep_calls == [2.5]
+    assert job.snapshot.status == JobStatus.completed

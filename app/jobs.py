@@ -79,28 +79,39 @@ class JobManager:
             try:
                 data = json.loads(manifest_path.read_text(encoding="utf-8"))
                 folder = manifest_path.parent.name
+                album_id = str(data.get("id", folder))
                 exports = [f"/albums/{folder}/{item}" for item in data.get("exports", [])]
                 photos = data.get("photos", [])
                 cover = None
                 if photos:
                     cover = f"/albums/{folder}/{photos[0]['image']}"
-                zip_path = manifest_path.parent / f"{folder}.zip"
                 albums.append(
                     AlbumSummary(
-                        id=data.get("id", folder),
+                        id=album_id,
                         title=data.get("title", folder),
                         location=data.get("location", ""),
                         photo_count=len(photos),
                         created_at=datetime.fromisoformat(data["created_at"]),
                         cover_url=cover,
                         output_url=f"/albums/{folder}/index.html",
-                        zip_url=f"/albums/{folder}/{folder}.zip" if zip_path.exists() else None,
+                        share_url=f"/albums/{folder}/share.html",
+                        zip_url=f"/api/albums/{album_id}/zip",
                         export_urls=exports,
                     )
                 )
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         return sorted(albums, key=lambda album: album.created_at, reverse=True)
+
+    def album_directory(self, album_id: str) -> Path | None:
+        for manifest_path in self.settings.output_dir.glob("*/album.json"):
+            try:
+                data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if str(data.get("id", manifest_path.parent.name)) == album_id:
+                    return manifest_path.parent
+            except (OSError, ValueError, TypeError):
+                continue
+        return None
 
     def _persist(self, job: Job) -> None:
         if not job.workspace.exists():

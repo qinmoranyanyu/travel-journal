@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
@@ -17,6 +17,7 @@ from .jobs import JobManager
 from .media import is_supported, safe_filename
 from .models import AlbumInput, JobSnapshot, TERMINAL_STATUSES
 from .pipeline import run_pipeline
+from .rendering import create_share_zip
 
 
 settings = get_settings()
@@ -85,6 +86,21 @@ async def job_events(job_id: str) -> StreamingResponse:
 @app.get("/api/albums")
 async def albums():
     return manager.history()
+
+
+@app.get("/api/albums/{album_id}/zip")
+async def download_album_zip(album_id: str) -> FileResponse:
+    output_dir = manager.album_directory(album_id)
+    if output_dir is None:
+        raise HTTPException(status_code=404, detail="相册不存在")
+    zip_path = output_dir / f"{output_dir.name}.zip"
+    if not zip_path.exists():
+        await asyncio.to_thread(create_share_zip, output_dir)
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=f"{output_dir.name}.zip",
+    )
 
 
 @app.post("/api/jobs", response_model=JobSnapshot, status_code=202)

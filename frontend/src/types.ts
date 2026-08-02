@@ -12,6 +12,7 @@ export interface JobSnapshot {
   updated_at: string;
   error?: string | null;
   output_url?: string | null;
+  share_url?: string | null;
   zip_url?: string | null;
   export_urls: string[];
 }
@@ -24,6 +25,7 @@ export interface AlbumSummary {
   created_at: string;
   cover_url?: string | null;
   output_url: string;
+  share_url: string;
   zip_url?: string | null;
   export_urls: string[];
 }

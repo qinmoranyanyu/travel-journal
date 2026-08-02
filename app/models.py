@@ -48,6 +48,7 @@ class JobSnapshot(BaseModel):
     updated_at: datetime = Field(default_factory=utc_now)
     error: str | None = None
     output_url: str | None = None
+    share_url: str | None = None
     zip_url: str | None = None
     export_urls: list[str] = Field(default_factory=list)
 
@@ -60,6 +61,7 @@ class AlbumSummary(BaseModel):
     created_at: datetime
     cover_url: str | None = None
     output_url: str
+    share_url: str
     zip_url: str | None = None
     export_urls: list[str] = Field(default_factory=list)
 
@@ -102,4 +104,3 @@ class AlbumManifest(BaseModel):
     chapters: list[dict[str, Any]]
     photos: list[dict[str, Any]]
     exports: list[str] = Field(default_factory=list)
-
