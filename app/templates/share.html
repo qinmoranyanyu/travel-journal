@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>{{ album.title }} - 分享长图</title>
+  <link rel="stylesheet" href="assets/styles/share.css">
+</head>
+<body>
+  <section class="share-sheet share-cover">
+    <div class="share-cover__rule"></div>
+    <p class="share-kicker">TRAVEL FIELD NOTES</p>
+    <div class="share-cover__center">
+      <p>{{ album.location or "沿途手记" }}</p>
+      <h1>{{ album.title }}</h1>
+      <blockquote>{{ album.cover_subtitle }}</blockquote>
+    </div>
+    <footer><span>{{ album.date_range }}</span><span>{{ album.companions }}</span></footer>
+  </section>
+
+  {% for chapter in chapters %}
+  <section class="share-sheet share-chapter">
+    <header>
+      <p>{{ "%02d" | format(loop.index) }} / {{ "%02d" | format(chapters | length) }}</p>
+      <div class="share-chapter__heading">
+        <h2>{{ chapter.title }}</h2>
+        <div>{{ chapter.intro }}</div>
+      </div>
+    </header>
+    <div class="share-grid">
+      {% for photo in chapter.photos %}
+      <figure>
+        <img src="{{ photo.image }}" alt="">
+        <figcaption><span>{{ photo.display_date }}</span>{{ photo.caption }}</figcaption>
+      </figure>
+      {% endfor %}
+    </div>
+    {% if loop.last %}<blockquote class="share-closing">{{ album.closing }}</blockquote>{% endif %}
+  </section>
+  {% endfor %}
+</body>
+</html>
