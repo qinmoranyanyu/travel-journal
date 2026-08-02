@@ -1,4 +1,4 @@
-import type { AlbumSummary, Health, JobDetail, JobSnapshot } from "./types";
+import type { AlbumSummary, Health, JobDetail, JobListItem, JobSnapshot } from "./types";
 
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -17,7 +17,11 @@ export const api = {
   health: () => getJson<Health>("/api/health"),
   current: () => getJson<JobSnapshot | null>("/api/jobs/current"),
   currentDetail: () => getJson<JobDetail | null>("/api/jobs/current/detail"),
+  jobs: () => getJson<JobListItem[]>("/api/jobs"),
+  jobDetail: (jobId: string) => getJson<JobDetail>(`/api/jobs/${jobId}/detail`),
   albums: () => getJson<AlbumSummary[]>("/api/albums"),
+  start: (jobId: string) => postJson<JobSnapshot>(`/api/jobs/${jobId}/start`),
+  pause: (jobId: string) => postJson<JobSnapshot>(`/api/jobs/${jobId}/pause`),
   resume: (jobId: string) => postJson<JobSnapshot>(`/api/jobs/${jobId}/resume`),
   stopRetries: (jobId: string) => postJson<JobSnapshot>(`/api/jobs/${jobId}/stop-retries`)
 };

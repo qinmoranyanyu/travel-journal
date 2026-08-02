@@ -14,6 +14,7 @@ def utc_now() -> datetime:
 class JobStatus(str, Enum):
     queued = "queued"
     running = "running"
+    paused = "paused"
     completed = "completed"
     partial = "partial"
     failed = "failed"
@@ -21,6 +22,7 @@ class JobStatus(str, Enum):
 
 
 TERMINAL_STATUSES = {
+    JobStatus.paused,
     JobStatus.completed,
     JobStatus.partial,
     JobStatus.failed,
@@ -55,6 +57,7 @@ class JobSnapshot(BaseModel):
     retry_stop_requested: bool = False
     retry_round: int = 0
     failed_items: int = 0
+    pause_requested: bool = False
 
 
 class JobUpload(BaseModel):
@@ -69,6 +72,13 @@ class JobDetail(BaseModel):
     snapshot: JobSnapshot
     album_input: AlbumInput
     uploads: list[JobUpload] = Field(default_factory=list)
+
+
+class JobListItem(BaseModel):
+    snapshot: JobSnapshot
+    album_input: AlbumInput
+    upload_count: int
+    preview_url: str | None = None
 
 
 class AlbumSummary(BaseModel):

@@ -1,8 +1,11 @@
 import asyncio
+import io
 import json
 from datetime import datetime, timezone
 
 import httpx
+import pytest
+from PIL import Image
 
 from app import main
 from app.config import Settings
@@ -71,7 +74,7 @@ def test_zip_endpoint_rebuilds_missing_archive(monkeypatch, tmp_path):
     assert (album_dir / "trip-folder.zip").exists()
 
 
-def test_manager_restores_running_job_as_queued_with_checkpoint(tmp_path):
+def test_manager_restores_running_job_as_paused_with_checkpoint(tmp_path):
     settings = Settings(output_dir=tmp_path / "outputs", job_dir=tmp_path / ".jobs")
     settings.ensure_directories()
     manager = JobManager(settings)
@@ -89,7 +92,7 @@ def test_manager_restores_running_job_as_queued_with_checkpoint(tmp_path):
     restored = restored_manager.current()
 
     assert restored is not None
-    assert restored.snapshot.status == JobStatus.queued
+    assert restored.snapshot.status == JobStatus.paused
     assert restored.snapshot.stage == "generation_retry"
     assert not restored.snapshot.can_stop_retries
     assert restored.pipeline_state["candidate_ids"] == ["photo-00001"]
@@ -153,3 +156,59 @@ def test_current_detail_and_photo_endpoint_restore_form_data(monkeypatch, tmp_pa
     assert stopped.json()["retry_stop_requested"] is True
     assert stopped.json()["can_stop_retries"] is False
     assert job.stop_retry_event.is_set()
+
+
+def test_manager_supports_multiple_jobs_but_only_one_manual_start(tmp_path):
+    settings = Settings(output_dir=tmp_path / "outputs", job_dir=tmp_path / ".jobs")
+    settings.ensure_directories()
+    manager = JobManager(settings)
+
+    async def exercise_manager():
+        first = await manager.create("first", AlbumInput(title="First", target_count=1))
+        second = await manager.create("second", AlbumInput(title="Second", target_count=1))
+        assert first.snapshot.status == JobStatus.paused
+        assert second.snapshot.status == JobStatus.paused
+
+        await manager.prepare_start("first")
+        with pytest.raises(RuntimeError, match="请先暂停"):
+            await manager.prepare_start("second")
+
+        first.snapshot.status = JobStatus.running
+        first.task = asyncio.create_task(asyncio.Event().wait())
+        manager.request_pause(first)
+        assert first.snapshot.pause_requested is True
+        assert first.pause_event.is_set()
+        first.task.cancel()
+        await asyncio.gather(first.task, return_exceptions=True)
+
+    asyncio.run(exercise_manager())
+
+
+def test_create_job_waits_for_manual_start(monkeypatch, tmp_path):
+    settings = Settings(output_dir=tmp_path / "outputs", job_dir=tmp_path / ".jobs")
+    settings.ensure_directories()
+    manager = JobManager(settings)
+    monkeypatch.setattr(main, "manager", manager)
+    image_bytes = io.BytesIO()
+    Image.new("RGB", (20, 20), "white").save(image_bytes, "JPEG")
+
+    async def create_job_request():
+        transport = httpx.ASGITransport(app=main.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            created = await client.post(
+                "/api/jobs",
+                data={"title": "Manual task", "target_count": "1"},
+                files={"photos": ("photo.jpg", image_bytes.getvalue(), "image/jpeg")},
+            )
+            jobs = await client.get("/api/jobs")
+            return created, jobs
+
+    created, jobs = asyncio.run(create_job_request())
+
+    assert created.status_code == 202
+    assert created.json()["status"] == "paused"
+    assert created.json()["message"] == "任务已创建，等待手动开始"
+    assert manager.current() is not None
+    assert manager.current().task is None
+    assert jobs.status_code == 200
+    assert jobs.json()[0]["album_input"]["title"] == "Manual task"

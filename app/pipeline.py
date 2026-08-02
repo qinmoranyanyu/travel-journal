@@ -28,6 +28,10 @@ from .rendering import (
 from .selection import select_story_set
 
 
+class PipelinePaused(Exception):
+    pass
+
+
 async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> None:
     output_dir: Path | None = None
     try:
@@ -41,11 +45,13 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             message="正在读取照片时间与画面信息，已完成的步骤会自动跳过",
             error=None,
             can_stop_retries=False,
+            pause_requested=False,
             total_items=len(job.uploads),
         )
 
         photos = _restore_media_photos(job) or _build_media_photos(job)
         for index, photo in enumerate(photos):
+            _check_pause(job)
             if not _metadata_ready(photo):
                 await asyncio.to_thread(inspect_photo, photo)
                 await asyncio.to_thread(
@@ -55,6 +61,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     job.workspace / "generation",
                 )
                 _checkpoint_photos(job, manager, photos)
+            _check_pause(job)
             manager.update(
                 job,
                 completed_items=index + 1,
@@ -62,6 +69,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 message=f"正在整理第 {index + 1}/{len(photos)} 张照片",
             )
 
+        _check_pause(job)
         manager.update(job, stage="deduplicate", progress=18, message="正在过滤近似照片")
         photo_by_id = {photo.id: photo for photo in photos}
         candidate_ids = job.pipeline_state.get("candidate_ids")
@@ -82,11 +90,13 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
         )
         pending_analysis = [photo for photo in candidates if photo.analysis is None]
         for start in range(0, len(pending_analysis), settings.vision_batch_size):
+            _check_pause(job)
             batch = pending_analysis[start : start + settings.vision_batch_size]
             analyses = await asyncio.to_thread(service.analyze_photos, batch)
             for photo, analysis in zip(batch, analyses, strict=False):
                 photo.analysis = analysis
             _checkpoint_photos(job, manager, photos)
+            _check_pause(job)
             completed = sum(photo.analysis is not None for photo in candidates)
             manager.update(
                 job,
@@ -95,6 +105,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 message=f"已理解 {completed}/{len(candidates)} 张候选照片",
             )
 
+        _check_pause(job)
         manager.update(job, stage="selection", progress=41, message="正在组合最有故事价值的照片")
         selected_ids = job.pipeline_state.get("selected_ids")
         selected = [photo_by_id[photo_id] for photo_id in selected_ids or [] if photo_id in photo_by_id]
@@ -104,6 +115,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
         if not selected:
             raise RuntimeError("没有找到可用于生成相册的照片")
 
+        _check_pause(job)
         manager.update(job, stage="story", progress=46, message="正在编排旅行章节与旁白")
         story_data = job.pipeline_state.get("story")
         if story_data:
@@ -121,6 +133,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             photo.chapter_id = chapter_by_photo.get(photo.id, story.chapters[-1].id)
         _checkpoint_photos(job, manager, photos)
 
+        _check_pause(job)
         output_dir = _get_output_dir(settings.output_dir, job, manager)
         photos_dir = output_dir / "assets" / "photos"
         sources_dir = output_dir / "sources"
@@ -155,17 +168,13 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             nonlocal generation_attempted
             if generation_attempted and settings.image_generation_interval_seconds > 0:
                 manager.update(job, message=waiting_message)
-                if allow_stop:
-                    try:
-                        await asyncio.wait_for(
-                            job.stop_retry_event.wait(),
-                            timeout=settings.image_generation_interval_seconds,
-                        )
-                        return False
-                    except TimeoutError:
-                        pass
-                else:
-                    await asyncio.sleep(settings.image_generation_interval_seconds)
+                if not await _wait_for_job_delay(
+                    job,
+                    settings.image_generation_interval_seconds,
+                    allow_stop,
+                ):
+                    return False
+            _check_pause(job)
             return not (allow_stop and job.stop_retry_event.is_set())
 
         async def generate_photo(photo: MediaPhoto) -> None:
@@ -187,6 +196,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
         if not job.pipeline_state.get("generation_first_pass_complete"):
             initial_queue = [photo for photo in selected if photo.generated_path is None]
             for index, photo in enumerate(initial_queue):
+                _check_pause(job)
                 await wait_for_generation_slot(
                     (
                         f"等待 {settings.image_generation_interval_seconds:g} 秒后生成"
@@ -201,6 +211,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     generation_errors[photo.id] = str(exc)
                 _checkpoint_photos(job, manager, photos)
                 _checkpoint(job, manager, generation_errors=generation_errors)
+                _check_pause(job)
                 completed = len(selected) - len(
                     [item for item in selected if item.generated_path is None]
                 )
@@ -229,6 +240,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             )
             current_round = list(pending)
             for index, photo in enumerate(current_round):
+                _check_pause(job)
                 if job.stop_retry_event.is_set():
                     break
                 should_continue = await wait_for_generation_slot(
@@ -252,6 +264,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     generation_errors=generation_errors,
                     retry_round=retry_round,
                 )
+                _check_pause(job)
                 remaining = sum(photo.generated_path is None for photo in selected)
                 manager.update(
                     job,
@@ -272,6 +285,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 message=f"已终止重试，正在用处理后的原图补齐 {len(pending)} 张照片",
             )
             for photo in pending:
+                _check_pause(job)
                 final_path = photos_dir / f"{photo.id}.jpg"
                 temporary_path = photos_dir / f"{photo.id}.tmp.jpg"
                 fallback_source = photo.generation_path or photo.source_path
@@ -292,6 +306,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     skipped_generation_ids=sorted(skipped_ids),
                     generation_errors=generation_errors,
                 )
+                _check_pause(job)
             _checkpoint(
                 job,
                 manager,
@@ -309,6 +324,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             key=photo_sort_key,
         )
 
+        _check_pause(job)
         manager.update(
             job,
             stage="render",
@@ -325,6 +341,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
         )
         await asyncio.to_thread(render_album, manifest, output_dir)
         _checkpoint(job, manager, render_complete=True)
+        _check_pause(job)
 
         manager.update(job, stage="export", progress=94, message="正在导出朋友圈章节长图")
         export_error: str | None = None
@@ -336,8 +353,10 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 exports = []
                 export_error = str(exc)
             _checkpoint(job, manager, exports=exports)
+        _check_pause(job)
         await asyncio.to_thread(update_manifest_exports, output_dir, exports)
         await asyncio.to_thread(create_share_zip, output_dir)
+        _check_pause(job)
 
         folder = output_dir.name
         status = JobStatus.partial if failures or export_error else JobStatus.completed
@@ -362,6 +381,14 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             can_stop_retries=False,
             failed_items=len(failures),
         )
+    except PipelinePaused:
+        manager.update(
+            job,
+            status=JobStatus.paused,
+            message=f"任务已暂停，可从 {job.snapshot.stage} 阶段继续",
+            pause_requested=False,
+            can_stop_retries=False,
+        )
     except Exception as exc:
         manager.update(
             job,
@@ -371,6 +398,30 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             error=str(exc),
             can_stop_retries=False,
         )
+
+
+def _check_pause(job: Job) -> None:
+    if job.pause_event.is_set() or job.snapshot.pause_requested:
+        raise PipelinePaused
+
+
+async def _wait_for_job_delay(job: Job, seconds: float, allow_stop: bool) -> bool:
+    delay = asyncio.create_task(asyncio.sleep(seconds))
+    pause = asyncio.create_task(job.pause_event.wait())
+    waiters = {delay, pause}
+    stop = None
+    if allow_stop:
+        stop = asyncio.create_task(job.stop_retry_event.wait())
+        waiters.add(stop)
+    try:
+        await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
+    _check_pause(job)
+    return not (stop and stop.done() and job.stop_retry_event.is_set())
 
 
 def _build_media_photos(job: Job) -> list[MediaPhoto]:
