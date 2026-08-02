@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
@@ -15,14 +16,30 @@ from fastapi.staticfiles import StaticFiles
 from .config import get_settings
 from .jobs import JobManager
 from .media import is_supported, safe_filename
-from .models import AlbumInput, JobSnapshot, TERMINAL_STATUSES
+from .models import AlbumInput, JobDetail, JobSnapshot, JobUpload, TERMINAL_STATUSES
 from .pipeline import run_pipeline
 from .rendering import create_share_zip
 
 
 settings = get_settings()
 manager = JobManager(settings)
-app = FastAPI(title="Travel Journal", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    for job in manager.pending_resumes():
+        job.task = asyncio.create_task(run_pipeline(job, manager, settings))
+    try:
+        yield
+    finally:
+        running = [job.task for job in manager.jobs.values() if job.task and not job.task.done()]
+        for task in running:
+            task.cancel()
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+
+
+app = FastAPI(title="Travel Journal", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -53,11 +70,57 @@ async def current_job() -> JobSnapshot | None:
     return job.snapshot if job else None
 
 
+@app.get("/api/jobs/current/detail", response_model=JobDetail | None)
+async def current_job_detail() -> JobDetail | None:
+    job = manager.current()
+    return _job_detail(job) if job else None
+
+
 @app.get("/api/jobs/{job_id}", response_model=JobSnapshot)
 async def get_job(job_id: str) -> JobSnapshot:
     job = manager.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
+    return job.snapshot
+
+
+@app.get("/api/jobs/{job_id}/photos/{photo_id}")
+async def job_photo(job_id: str, photo_id: str) -> FileResponse:
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    upload = next((item for item in job.uploads if item.get("id") == photo_id), None)
+    if not upload:
+        raise HTTPException(status_code=404, detail="照片不存在")
+    analysis_path = job.workspace / "analysis" / f"{photo_id}.jpg"
+    source_path = Path(upload["path"])
+    photo_path = analysis_path if analysis_path.exists() else source_path
+    if not photo_path.exists():
+        raise HTTPException(status_code=404, detail="照片文件不存在")
+    return FileResponse(photo_path, filename=upload["original_name"])
+
+
+@app.post("/api/jobs/{job_id}/resume", response_model=JobSnapshot, status_code=202)
+async def resume_job(job_id: str) -> JobSnapshot:
+    try:
+        job = await manager.prepare_resume(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="任务不存在") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job.task = asyncio.create_task(run_pipeline(job, manager, settings))
+    return job.snapshot
+
+
+@app.post("/api/jobs/{job_id}/stop-retries", response_model=JobSnapshot)
+async def stop_generation_retries(job_id: str) -> JobSnapshot:
+    job = manager.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    try:
+        manager.request_stop_retries(job)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return job.snapshot
 
 
@@ -176,6 +239,23 @@ def _browser_timestamp(value) -> datetime | None:
         return datetime.fromtimestamp(float(value) / 1000).replace(microsecond=0)
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _job_detail(job) -> JobDetail:
+    return JobDetail(
+        snapshot=job.snapshot,
+        album_input=job.album_input,
+        uploads=[
+            JobUpload(
+                id=upload["id"],
+                original_name=upload["original_name"],
+                order=upload["order"],
+                modified_at=upload.get("modified_at"),
+                preview_url=f"/api/jobs/{job.snapshot.id}/photos/{upload['id']}",
+            )
+            for upload in sorted(job.uploads, key=lambda item: item["order"])
+        ],
+    )
 
 
 app.mount("/albums", StaticFiles(directory=settings.output_dir, html=True), name="albums")

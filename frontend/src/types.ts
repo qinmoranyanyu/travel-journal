@@ -15,6 +15,32 @@ export interface JobSnapshot {
   share_url?: string | null;
   zip_url?: string | null;
   export_urls: string[];
+  can_stop_retries: boolean;
+  retry_stop_requested: boolean;
+  retry_round: number;
+  failed_items: number;
+}
+
+export interface AlbumInput {
+  title: string;
+  location: string;
+  companions: string;
+  memory: string;
+  target_count: number;
+}
+
+export interface JobUpload {
+  id: string;
+  original_name: string;
+  order: number;
+  modified_at?: string | null;
+  preview_url: string;
+}
+
+export interface JobDetail {
+  snapshot: JobSnapshot;
+  album_input: AlbumInput;
+  uploads: JobUpload[];
 }
 
 export interface AlbumSummary {

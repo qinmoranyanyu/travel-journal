@@ -51,6 +51,24 @@ class JobSnapshot(BaseModel):
     share_url: str | None = None
     zip_url: str | None = None
     export_urls: list[str] = Field(default_factory=list)
+    can_stop_retries: bool = False
+    retry_stop_requested: bool = False
+    retry_round: int = 0
+    failed_items: int = 0
+
+
+class JobUpload(BaseModel):
+    id: str
+    original_name: str
+    order: int
+    modified_at: datetime | None = None
+    preview_url: str
+
+
+class JobDetail(BaseModel):
+    snapshot: JobSnapshot
+    album_input: AlbumInput
+    uploads: list[JobUpload] = Field(default_factory=list)
 
 
 class AlbumSummary(BaseModel):

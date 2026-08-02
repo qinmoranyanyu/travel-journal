@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  CircleStop,
   Download,
   FolderOpen,
   Globe2,
@@ -14,6 +15,7 @@ import {
   LoaderCircle,
   MapPin,
   Maximize2,
+  Play,
   RotateCcw,
   Share2,
   Sparkles,
@@ -21,7 +23,7 @@ import {
   X
 } from "lucide-react";
 import { api, submitAlbum } from "./api";
-import type { AlbumSummary, Health, JobSnapshot } from "./types";
+import type { AlbumSummary, Health, JobSnapshot, JobUpload } from "./types";
 
 const terminalStatuses = new Set(["completed", "partial", "failed", "interrupted"]);
 const previewLimit = 8;
@@ -41,6 +43,8 @@ const stageRanks: Record<string, number> = {
   selection: 2,
   story: 2,
   generation: 3,
+  generation_retry: 3,
+  generation_fallback: 3,
   render: 4,
   export: 4,
   done: 5
@@ -51,8 +55,11 @@ function App() {
   const [job, setJob] = useState<JobSnapshot | null>(null);
   const [albums, setAlbums] = useState<AlbumSummary[]>([]);
   const [files, setFiles] = useState<File[]>([]);
+  const [restoredUploads, setRestoredUploads] = useState<JobUpload[]>([]);
+  const [showingCurrentTask, setShowingCurrentTask] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [taskActionPending, setTaskActionPending] = useState(false);
   const [error, setError] = useState("");
   const [dragging, setDragging] = useState(false);
   const [title, setTitle] = useState("");
@@ -65,19 +72,50 @@ function App() {
   const folderInput = useRef<HTMLInputElement>(null);
 
   const active = Boolean(job && !terminalStatuses.has(job.status));
-  const previews = useMemo(
-    () => files.map((file) => ({ file, url: URL.createObjectURL(file) })),
+  const resumable = job?.status === "failed" || job?.status === "interrupted";
+  const taskLocked = active || resumable;
+  const formLocked = taskLocked || showingCurrentTask;
+  const localPreviews = useMemo(
+    () => files.map((file) => ({
+      key: `${file.name}-${file.size}-${file.lastModified}`,
+      name: file.name,
+      file,
+      url: URL.createObjectURL(file)
+    })),
     [files]
   );
+  const restoredPreviews = useMemo(
+    () => restoredUploads.map((upload) => ({
+      key: upload.id,
+      name: upload.original_name,
+      url: upload.preview_url,
+      thumbnailUrl: upload.preview_url
+    })),
+    [restoredUploads]
+  );
+  const previews = files.length ? localPreviews : restoredPreviews;
+  const selectedPhotoCount = previews.length;
 
-  useEffect(() => () => previews.forEach((preview) => URL.revokeObjectURL(preview.url)), [previews]);
+  useEffect(
+    () => () => localPreviews.forEach((preview) => URL.revokeObjectURL(preview.url)),
+    [localPreviews]
+  );
 
   useEffect(() => {
-    Promise.all([api.health(), api.current(), api.albums()])
-      .then(([healthData, currentJob, albumData]) => {
+    Promise.all([api.health(), api.currentDetail(), api.albums()])
+      .then(([healthData, currentDetail, albumData]) => {
         setHealth(healthData);
-        setJob(currentJob);
+        setJob(currentDetail?.snapshot || null);
         setAlbums(albumData);
+        if (currentDetail) {
+          setTitle(currentDetail.album_input.title);
+          setLocation(currentDetail.album_input.location);
+          setCompanions(currentDetail.album_input.companions);
+          setMemory(currentDetail.album_input.memory);
+          setTargetCount(currentDetail.album_input.target_count);
+          setRestoredUploads(currentDetail.uploads);
+          setShowingCurrentTask(true);
+        }
       })
       .catch((reason: Error) => setError(reason.message));
   }, []);
@@ -98,11 +136,13 @@ function App() {
   }, [job?.id, job?.status]);
 
   function addFiles(nextFiles: File[]) {
+    if (formLocked) return;
     const supported = nextFiles.filter((file) => /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name));
     const unique = new Map<string, File>();
     [...files, ...supported].forEach((file) => unique.set(`${file.name}-${file.size}-${file.lastModified}`, file));
     const merged = [...unique.values()];
     setFiles(merged);
+    setRestoredUploads([]);
     if (!files.length) setTargetCount(Math.max(1, Math.min(20, merged.length)));
     setError(supported.length ? "" : "未找到支持的图片格式");
   }
@@ -142,6 +182,7 @@ function App() {
     try {
       const snapshot = await submitAlbum(data, setUploadProgress);
       setJob(snapshot);
+      setShowingCurrentTask(true);
       setUploadProgress(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "任务提交失败");
@@ -153,6 +194,8 @@ function App() {
 
   function resetForm() {
     setFiles([]);
+    setRestoredUploads([]);
+    setShowingCurrentTask(false);
     setTitle("");
     setLocation("");
     setCompanions("");
@@ -161,6 +204,32 @@ function App() {
     setShowAllPhotos(false);
     setError("");
   }
+
+  const resumeCurrentJob = useCallback(async () => {
+    if (!job) return;
+    setTaskActionPending(true);
+    setError("");
+    try {
+      setJob(await api.resume(job.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "任务继续失败");
+    } finally {
+      setTaskActionPending(false);
+    }
+  }, [job?.id]);
+
+  const stopGenerationRetries = useCallback(async () => {
+    if (!job) return;
+    setTaskActionPending(true);
+    setError("");
+    try {
+      setJob(await api.stopRetries(job.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "终止重试失败");
+    } finally {
+      setTaskActionPending(false);
+    }
+  }, [job?.id]);
 
   return (
     <div className="app-shell">
@@ -182,29 +251,29 @@ function App() {
       <main className="workspace">
         <section className="composer" aria-labelledby="new-album-title">
           <div className="section-heading">
-            <div><span>NEW VOLUME</span><h2 id="new-album-title">新建旅行手记</h2></div>
-            {files.length > 0 && <button className="quiet-button" type="button" onClick={resetForm} disabled={active}><RotateCcw size={16} />清空</button>}
+            <div><span>{showingCurrentTask ? "CURRENT VOLUME" : "NEW VOLUME"}</span><h2 id="new-album-title">{showingCurrentTask ? "当前任务资料" : "新建旅行手记"}</h2></div>
+            {selectedPhotoCount > 0 && <button className="quiet-button" type="button" onClick={resetForm} disabled={taskLocked}><RotateCcw size={16} />清空</button>}
           </div>
 
           <form onSubmit={handleSubmit}>
             <div
-              className={`dropzone ${dragging ? "is-dragging" : ""} ${files.length ? "has-files" : ""}`}
+              className={`dropzone ${dragging ? "is-dragging" : ""} ${selectedPhotoCount ? "has-files" : ""}`}
               onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
               onDragOver={(event) => event.preventDefault()}
               onDragLeave={() => setDragging(false)}
               onDrop={(event) => {
                 event.preventDefault();
                 setDragging(false);
-                addFiles([...event.dataTransfer.files]);
+                if (!formLocked) addFiles([...event.dataTransfer.files]);
               }}
             >
-              {files.length ? (
+              {selectedPhotoCount ? (
                 <>
                   <PhotoContactSheet
                     previews={previews}
-                    fileCount={files.length}
+                    fileCount={selectedPhotoCount}
                     expanded={showAllPhotos}
-                    disabled={active}
+                    disabled={formLocked}
                     onRemove={removePreviewFile}
                     onToggle={toggleAllPhotos}
                   />
@@ -213,31 +282,42 @@ function App() {
                 <div className="dropzone__empty"><ImagePlus size={30} /><strong>拖入照片或旅行文件夹</strong><span>JPG、PNG、WebP、HEIC</span></div>
               )}
               <div className="dropzone__actions">
-                <button type="button" onClick={() => fileInput.current?.click()}><Upload size={17} />选择照片</button>
-                <button type="button" onClick={() => folderInput.current?.click()}><FolderOpen size={17} />选择文件夹</button>
+                <button type="button" disabled={formLocked} onClick={() => fileInput.current?.click()}><Upload size={17} />选择照片</button>
+                <button type="button" disabled={formLocked} onClick={() => folderInput.current?.click()}><FolderOpen size={17} />选择文件夹</button>
               </div>
               <input ref={fileInput} hidden type="file" accept="image/jpeg,image/png,image/webp,.heic,.heif" multiple onChange={(e) => { addFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
               <input ref={folderInput} hidden type="file" accept="image/*,.heic,.heif" multiple {...({ webkitdirectory: "" } as object)} onChange={(e) => { addFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
             </div>
 
             <div className="field-grid">
-              <label className="field field--wide"><span>旅行名称 *</span><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="2025 年川西自驾" maxLength={120} required /></label>
-              <label className="field"><span>地点</span><div className="input-with-icon"><MapPin size={16} /><input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="川西" maxLength={120} /></div></label>
-              <label className="field"><span>同行关系</span><input value={companions} onChange={(e) => setCompanions(e.target.value)} placeholder="和父母" maxLength={120} /></label>
-              <label className="field field--wide"><span>一句话回忆</span><textarea value={memory} onChange={(e) => setMemory(e.target.value)} placeholder="父亲退休后的第一次远行" maxLength={500} rows={3} /></label>
-              <label className="field"><span>目标成片数 *</span><input type="number" min={1} value={targetCount} onChange={(e) => setTargetCount(Math.max(1, Number(e.target.value)))} required /></label>
+              <label className="field field--wide"><span>旅行名称 *</span><input disabled={formLocked} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="2025 年川西自驾" maxLength={120} required /></label>
+              <label className="field"><span>地点</span><div className="input-with-icon"><MapPin size={16} /><input disabled={formLocked} value={location} onChange={(e) => setLocation(e.target.value)} placeholder="川西" maxLength={120} /></div></label>
+              <label className="field"><span>同行关系</span><input disabled={formLocked} value={companions} onChange={(e) => setCompanions(e.target.value)} placeholder="和父母" maxLength={120} /></label>
+              <label className="field field--wide"><span>一句话回忆</span><textarea disabled={formLocked} value={memory} onChange={(e) => setMemory(e.target.value)} placeholder="父亲退休后的第一次远行" maxLength={500} rows={3} /></label>
+              <label className="field"><span>目标成片数 *</span><input disabled={formLocked} type="number" min={1} value={targetCount} onChange={(e) => setTargetCount(Math.max(1, Number(e.target.value)))} required /></label>
             </div>
 
             {error && <div className="form-error">{error}</div>}
-            <button className="primary-button" type="submit" disabled={active || submitting || !files.length || !title.trim() || !health?.api_configured}>
+            <button className="primary-button" type="submit" disabled={formLocked || submitting || !files.length || !title.trim() || !health?.api_configured}>
               {submitting ? <LoaderCircle className="spin" size={19} /> : <Sparkles size={19} />}
-              {uploadProgress !== null ? `正在上传 ${Math.round(uploadProgress)}%` : active ? "当前任务进行中" : "开始生成手记"}
+              {uploadProgress !== null
+                ? `正在上传 ${Math.round(uploadProgress)}%`
+                : active
+                  ? "当前任务进行中"
+                  : showingCurrentTask
+                    ? "当前任务资料已恢复"
+                    : "开始生成手记"}
             </button>
           </form>
         </section>
 
         <aside className="status-column">
-          <TaskProgress job={job} />
+          <TaskProgress
+            job={job}
+            actionPending={taskActionPending}
+            onResume={resumeCurrentJob}
+            onStopRetries={stopGenerationRetries}
+          />
           <AlbumHistory albums={albums} />
         </aside>
       </main>
@@ -245,7 +325,13 @@ function App() {
   );
 }
 
-type PhotoPreview = { file: File; url: string };
+type PhotoPreview = {
+  key: string;
+  name: string;
+  url: string;
+  thumbnailUrl?: string;
+  file?: File;
+};
 
 async function createThumbnailUrl(file: File): Promise<string | null> {
   let bitmap: ImageBitmap | null = null;
@@ -290,29 +376,29 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
 }) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
   const [, setThumbnailVersion] = useState(0);
-  const thumbnailUrls = useRef(new Map<File, string>());
+  const thumbnailUrls = useRef(new Map<string, string>());
   const displayedPreviews = expanded ? previews : previews.slice(0, previewLimit);
   const activePreview = previewIndex === null ? null : previews[previewIndex];
 
   useEffect(() => {
-    const currentFiles = new Set(previews.map(({ file }) => file));
-    for (const [file, thumbnailUrl] of thumbnailUrls.current) {
-      if (!currentFiles.has(file)) {
+    const currentKeys = new Set(previews.map((preview) => preview.key));
+    for (const [key, thumbnailUrl] of thumbnailUrls.current) {
+      if (!currentKeys.has(key)) {
         if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
-        thumbnailUrls.current.delete(file);
+        thumbnailUrls.current.delete(key);
       }
     }
 
     let cancelled = false;
     const generateThumbnails = async () => {
-      for (const { file } of displayedPreviews) {
-        if (thumbnailUrls.current.has(file)) continue;
+      for (const { key, file, thumbnailUrl: restoredThumbnail } of displayedPreviews) {
+        if (!file || restoredThumbnail || thumbnailUrls.current.has(key)) continue;
         const thumbnailUrl = await createThumbnailUrl(file);
-        if (cancelled || !currentFiles.has(file)) {
+        if (cancelled || !currentKeys.has(key)) {
           if (thumbnailUrl) URL.revokeObjectURL(thumbnailUrl);
           return;
         }
-        thumbnailUrls.current.set(file, thumbnailUrl || "");
+        thumbnailUrls.current.set(key, thumbnailUrl || "");
         setThumbnailVersion((version) => version + 1);
         await new Promise((resolve) => window.setTimeout(resolve, 0));
       }
@@ -361,20 +447,21 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
   return (
     <>
       <div className="contact-sheet">
-        {displayedPreviews.map(({ file, url }, index) => {
-          const thumbnailReady = thumbnailUrls.current.has(file);
-          const thumbnailUrl = thumbnailUrls.current.get(file) || url;
+        {displayedPreviews.map((preview, index) => {
+          const { key, name, file, url } = preview;
+          const thumbnailReady = Boolean(preview.thumbnailUrl) || thumbnailUrls.current.has(key);
+          const thumbnailUrl = preview.thumbnailUrl || thumbnailUrls.current.get(key) || url;
           return (
-          <div className="contact-sheet__item" key={`${file.name}-${file.size}-${file.lastModified}`}>
+          <div className="contact-sheet__item" key={key}>
             <button
               className="photo-preview"
               type="button"
               onClick={() => setPreviewIndex(index)}
-              aria-label={`放大预览 ${file.name}`}
+              aria-label={`放大预览 ${name}`}
               title="放大预览"
             >
               {thumbnailReady ? (
-                <img src={thumbnailUrl} alt={file.name} loading="lazy" decoding="async" draggable={false} />
+                <img src={thumbnailUrl} alt={name} loading="lazy" decoding="async" draggable={false} />
               ) : (
                 <span className="photo-preview__loading"><Images size={18} /></span>
               )}
@@ -383,10 +470,10 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
             <button
               className="photo-remove"
               type="button"
-              onClick={() => onRemove(file)}
-              disabled={disabled}
-              aria-label={`移除 ${file.name}`}
-              title={`移除 ${file.name}`}
+              onClick={() => file && onRemove(file)}
+              disabled={disabled || !file}
+              aria-label={file ? `移除 ${name}` : `${name} 已随任务保存`}
+              title={file ? `移除 ${name}` : "任务照片不可修改"}
             >
               <X size={15} />
             </button>
@@ -412,7 +499,7 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
           className="photo-lightbox"
           role="dialog"
           aria-modal="true"
-          aria-label={`预览 ${activePreview.file.name}`}
+          aria-label={`预览 ${activePreview.name}`}
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) setPreviewIndex(null);
           }}
@@ -424,9 +511,9 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
               <button className="lightbox-button lightbox-button--next" type="button" onClick={() => setPreviewIndex((previewIndex + 1) % previews.length)} aria-label="下一张" title="下一张"><ChevronRight size={26} /></button>
             </>
           )}
-          <img className="photo-lightbox__image" src={activePreview.url} alt={activePreview.file.name} />
+          <img className="photo-lightbox__image" src={activePreview.url} alt={activePreview.name} />
           <div className="photo-lightbox__caption">
-            <strong>{activePreview.file.name}</strong>
+            <strong>{activePreview.name}</strong>
             <span>{previewIndex + 1} / {previews.length}</span>
           </div>
         </div>
@@ -435,7 +522,17 @@ const PhotoContactSheet = memo(function PhotoContactSheet({
   );
 });
 
-const TaskProgress = memo(function TaskProgress({ job }: { job: JobSnapshot | null }) {
+const TaskProgress = memo(function TaskProgress({
+  job,
+  actionPending,
+  onResume,
+  onStopRetries
+}: {
+  job: JobSnapshot | null;
+  actionPending: boolean;
+  onResume: () => void;
+  onStopRetries: () => void;
+}) {
   const rank = job ? (stageRanks[job.stage] ?? 0) : -1;
   return (
     <section className="task-panel" aria-labelledby="task-title">
@@ -460,6 +557,28 @@ const TaskProgress = memo(function TaskProgress({ job }: { job: JobSnapshot | nu
             <strong>{job.message}</strong>
             {job.total_items > 0 && <span>{job.completed_items} / {job.total_items}</span>}
           </div>
+          {job.stage === "generation_retry" && job.failed_items > 0 && (
+            <div className="retry-status">
+              <span>第 {job.retry_round} 轮重试</span>
+              <strong>{job.failed_items} 张待成功</strong>
+            </div>
+          )}
+          {(job.can_stop_retries || job.status === "failed" || job.status === "interrupted") && (
+            <div className="task-controls">
+              {job.can_stop_retries && !job.retry_stop_requested && (
+                <button className="task-control task-control--danger" type="button" onClick={onStopRetries} disabled={actionPending}>
+                  {actionPending ? <LoaderCircle className="spin" size={17} /> : <CircleStop size={17} />}
+                  终止重试并继续
+                </button>
+              )}
+              {(job.status === "failed" || job.status === "interrupted") && (
+                <button className="task-control" type="button" onClick={onResume} disabled={actionPending}>
+                  {actionPending ? <LoaderCircle className="spin" size={17} /> : <Play size={17} />}
+                  从断点继续
+                </button>
+              )}
+            </div>
+          )}
           {job.error && <div className="task-error">{job.error}</div>}
           {(job.share_url || job.output_url || job.zip_url) && (
             <div className="result-actions">

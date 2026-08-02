@@ -24,7 +24,9 @@ class Job:
     album_input: AlbumInput
     workspace: Path
     uploads: list[dict[str, Any]] = field(default_factory=list)
+    pipeline_state: dict[str, Any] = field(default_factory=dict)
     task: asyncio.Task[None] | None = None
+    stop_retry_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class JobManager:
@@ -61,6 +63,45 @@ class JobManager:
 
     def get(self, job_id: str) -> Job | None:
         return self.jobs.get(job_id)
+
+    def pending_resumes(self) -> list[Job]:
+        return [
+            job
+            for job in self.jobs.values()
+            if job.snapshot.status == JobStatus.queued and job.task is None
+        ]
+
+    async def prepare_resume(self, job_id: str) -> Job:
+        async with self._lock:
+            job = self.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            if job.task and not job.task.done():
+                raise RuntimeError("任务正在运行")
+            if job.snapshot.status not in {JobStatus.failed, JobStatus.interrupted, JobStatus.queued}:
+                raise RuntimeError("当前任务不能继续")
+            if not job.snapshot.retry_stop_requested:
+                job.stop_retry_event.clear()
+            self.update(
+                job,
+                status=JobStatus.queued,
+                message=f"准备从 {job.snapshot.stage} 阶段继续",
+                error=None,
+                can_stop_retries=False,
+            )
+            self.current_job_id = job.snapshot.id
+            return job
+
+    def request_stop_retries(self, job: Job) -> None:
+        if not job.snapshot.can_stop_retries or job.snapshot.retry_stop_requested:
+            raise RuntimeError("当前没有可终止的生图重试")
+        job.stop_retry_event.set()
+        self.update(
+            job,
+            retry_stop_requested=True,
+            can_stop_retries=False,
+            message="已请求终止重试，当前请求结束后将继续排版",
+        )
 
     def update(self, job: Job, **changes: Any) -> None:
         snapshot = job.snapshot
@@ -120,11 +161,15 @@ class JobManager:
             "snapshot": job.snapshot.model_dump(mode="json"),
             "album_input": job.album_input.model_dump(mode="json"),
             "uploads": job.uploads,
+            "pipeline_state": job.pipeline_state,
         }
-        (job.workspace / "job.json").write_text(
+        state_path = job.workspace / "job.json"
+        temporary_path = job.workspace / "job.json.tmp"
+        temporary_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        temporary_path.replace(state_path)
 
     def _restore_interrupted(self) -> None:
         candidates: list[Job] = []
@@ -133,16 +178,19 @@ class JobManager:
                 data = json.loads(state_path.read_text(encoding="utf-8"))
                 snapshot = JobSnapshot.model_validate(data["snapshot"])
                 if snapshot.status not in TERMINAL_STATUSES:
-                    snapshot.status = JobStatus.interrupted
-                    snapshot.stage = "interrupted"
-                    snapshot.message = "本地服务曾在任务完成前停止"
+                    snapshot.status = JobStatus.queued
+                    snapshot.can_stop_retries = False
+                    snapshot.message = f"检测到未完成任务，将从 {snapshot.stage} 阶段继续"
                     snapshot.updated_at = utc_now()
                 job = Job(
                     snapshot=snapshot,
                     album_input=AlbumInput.model_validate(data["album_input"]),
                     workspace=state_path.parent,
                     uploads=data.get("uploads", []),
+                    pipeline_state=data.get("pipeline_state", {}),
                 )
+                if snapshot.retry_stop_requested:
+                    job.stop_retry_event.set()
                 self.jobs[snapshot.id] = job
                 candidates.append(job)
                 self._persist(job)
