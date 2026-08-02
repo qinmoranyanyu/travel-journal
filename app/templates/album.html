@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ album.title }}</title>
+  <link rel="stylesheet" href="assets/styles/album.css">
+</head>
+<body>
+  <header class="cover">
+    <div class="cover__index">TRAVEL FIELD NOTES / {{ album.created_at[:10] }}</div>
+    <div class="cover__body">
+      <p class="cover__place">{{ album.location or "沿途手记" }}</p>
+      <h1>{{ album.title }}</h1>
+      {% if album.cover_subtitle %}<p class="cover__subtitle">{{ album.cover_subtitle }}</p>{% endif %}
+    </div>
+    <div class="cover__footer">
+      <span>{{ album.date_range }}</span>
+      {% if album.companions %}<span>{{ album.companions }}</span>{% endif %}
+    </div>
+  </header>
+
+  <main>
+    {% for chapter in chapters %}
+    <section class="chapter" id="{{ chapter.id }}">
+      <header class="chapter__header">
+        <p class="chapter__number">{{ "%02d" | format(loop.index) }} / {{ "%02d" | format(chapters | length) }}</p>
+        <div>
+          <h2>{{ chapter.title }}</h2>
+          <p>{{ chapter.intro }}</p>
+        </div>
+      </header>
+
+      <div class="chapter__photos">
+        {% for photo in chapter.photos %}
+        <figure class="memory memory--{{ loop.index0 % 3 }}">
+          <img src="{{ photo.image }}" alt="{{ photo.description }}" loading="lazy" width="1024" height="1365">
+          <figcaption>
+            <span class="memory__date">{{ photo.display_date }}</span>
+            <span class="memory__caption">{{ photo.caption }}</span>
+          </figcaption>
+        </figure>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </main>
+
+  <footer class="closing">
+    <p class="closing__mark">END OF FIELD NOTES</p>
+    <blockquote>{{ album.closing }}</blockquote>
+    {% if album.memory %}<p class="closing__memory">“{{ album.memory }}”</p>{% endif %}
+    <p class="closing__date">整理于 {{ album.created_at[:10] }}</p>
+  </footer>
+</body>
+</html>
+
