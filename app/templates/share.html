@@ -13,6 +13,7 @@
       <p>{{ album.location or "沿途手记" }}</p>
       <h1>{{ album.title }}</h1>
       <blockquote>{{ album.cover_subtitle }}</blockquote>
+      {% if album.route_summary %}<p class="share-cover__route">{{ album.route_summary }}</p>{% endif %}
     </div>
     <footer><span>{{ album.date_range }}</span><span>{{ album.companions }}</span></footer>
   </section>
@@ -30,7 +31,13 @@
       {% for photo in chapter.photos %}
       <figure>
         <img src="{{ photo.image }}" alt="">
-        <figcaption><span>{{ photo.display_date }}</span>{{ photo.caption }}</figcaption>
+        <figcaption>
+          <span class="share-photo__meta">
+            <span>{{ photo.display_date }}</span>
+            {% if photo.show_share_location %}<em>{{ photo.display_location }}</em>{% endif %}
+          </span>
+          <span class="share-photo__caption">{{ photo.caption }}</span>
+        </figcaption>
       </figure>
       {% endfor %}
     </div>

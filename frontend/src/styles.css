@@ -126,6 +126,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .task-message { margin-top: 22px; padding-top: 18px; display: flex; justify-content: space-between; gap: 16px; border-top: 1px solid #435249; }
 .task-message strong { font-size: 13px; line-height: 1.6; }
 .task-message span { flex: none; color: #94a59c; font: 12px/1.6 "Segoe UI", sans-serif; }
+.location-stats { margin-top: 12px; padding: 10px 0; display: flex; flex-wrap: wrap; gap: 8px 16px; color: #aebdb5; border-top: 1px solid #35443c; font: 11px/1.4 "Segoe UI", sans-serif; }
+.location-stats span { display: inline-flex; align-items: center; gap: 5px; }
 .retry-status { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #b8c6bf; font-size: 12px; }
 .retry-status strong { color: #ffd1c7; font-size: 12px; }
 .task-controls { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; }

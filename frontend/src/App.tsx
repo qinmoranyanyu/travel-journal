@@ -29,6 +29,7 @@ const terminalStatuses = new Set(["paused", "completed", "partial", "failed", "i
 const previewLimit = 8;
 const stages = [
   { id: "metadata", label: "整理时间" },
+  { id: "location", label: "解析地点" },
   { id: "analysis", label: "理解画面" },
   { id: "story", label: "编排故事" },
   { id: "generation", label: "手绘重生" },
@@ -39,15 +40,16 @@ const stageRanks: Record<string, number> = {
   queued: 0,
   metadata: 0,
   deduplicate: 0,
-  analysis: 1,
-  selection: 2,
-  story: 2,
-  generation: 3,
-  generation_retry: 3,
-  generation_fallback: 3,
-  render: 4,
-  export: 4,
-  done: 5
+  location: 1,
+  analysis: 2,
+  selection: 3,
+  story: 3,
+  generation: 4,
+  generation_retry: 4,
+  generation_fallback: 4,
+  render: 5,
+  export: 5,
+  done: 6
 };
 
 function App() {
@@ -689,6 +691,13 @@ const TaskProgress = memo(function TaskProgress({
             <strong>{job.message}</strong>
             {job.total_items > 0 && <span>{job.completed_items} / {job.total_items}</span>}
           </div>
+          {(job.gps_photo_count > 0 || job.missing_gps_count > 0) && (
+            <div className="location-stats">
+              <span><MapPin size={13} />GPS {job.gps_photo_count}</span>
+              <span>已定位 {job.resolved_location_count}</span>
+              <span>无 GPS {job.missing_gps_count}</span>
+            </div>
+          )}
           {job.stage === "generation_retry" && job.failed_items > 0 && (
             <div className="retry-status">
               <span>第 {job.retry_round} 轮重试</span>

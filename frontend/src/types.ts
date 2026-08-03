@@ -20,6 +20,9 @@ export interface JobSnapshot {
   retry_round: number;
   failed_items: number;
   pause_requested: boolean;
+  gps_photo_count: number;
+  resolved_location_count: number;
+  missing_gps_count: number;
 }
 
 export interface AlbumInput {
@@ -69,4 +72,5 @@ export interface Health {
   api_configured: boolean;
   text_model?: string | null;
   image_model: string;
+  location_configured: boolean;
 }

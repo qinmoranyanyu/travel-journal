@@ -54,6 +54,7 @@ async def health() -> dict:
         "api_configured": settings.api_configured,
         "text_model": settings.openai_text_model or None,
         "image_model": settings.openai_image_model,
+        "location_configured": settings.location_configured,
     }
 
 

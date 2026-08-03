@@ -58,6 +58,9 @@ class JobSnapshot(BaseModel):
     retry_round: int = 0
     failed_items: int = 0
     pause_requested: bool = False
+    gps_photo_count: int = 0
+    resolved_location_count: int = 0
+    missing_gps_count: int = 0
 
 
 class JobUpload(BaseModel):
@@ -104,6 +107,19 @@ class ImageAnalysis(BaseModel):
     caption_seed: str = ""
 
 
+class PhotoLocation(BaseModel):
+    province: str = ""
+    city: str = ""
+    district: str = ""
+    township: str = ""
+    poi_name: str = ""
+    formatted_address: str = ""
+    display_name: str = ""
+    location_key: str = ""
+    provider: str = "amap"
+    confidence: str = "address"
+
+
 class StoryChapter(BaseModel):
     id: str
     title: str
@@ -119,7 +135,7 @@ class StoryPlan(BaseModel):
 
 
 class AlbumManifest(BaseModel):
-    schema_version: int = 1
+    schema_version: int = 2
     id: str
     title: str
     location: str = ""
@@ -129,6 +145,8 @@ class AlbumManifest(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
     cover_subtitle: str = ""
     closing: str = ""
+    route_locations: list[str] = Field(default_factory=list)
+    route_summary: str = ""
     chapters: list[dict[str, Any]]
     photos: list[dict[str, Any]]
     exports: list[str] = Field(default_factory=list)

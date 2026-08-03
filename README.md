@@ -17,8 +17,13 @@ OPENAI_BASE_URL=https://www.hellotranfer.top/
 OPENAI_API_KEY=你的密钥
 OPENAI_TEXT_MODEL=支持图片理解的文本模型
 OPENAI_IMAGE_MODEL=gpt-image-1
+AMAP_API_KEY=高德Web服务Key
 IMAGE_GENERATION_INTERVAL_SECONDS=10
 ```
+
+照片含有 EXIF GPS 时，应用会使用高德逆地理编码补充城市、区域和附近景点，地点会参与选片、章节编排与旁白生成。前往[高德开放平台控制台](https://console.amap.com/dev/key/app)创建应用并添加 Key，服务平台选择“Web 服务”。配置后需要重启应用；`AMAP_API_KEY` 未配置或地址查询失败时会跳过地点增强，不影响相册生成。
+
+EXIF 原始经纬度仅保存在本机 `.jobs/` 的任务断点中；公开的 Web 页面、`album.json`、长图和分享 ZIP 只包含简短地点名称。相距 200 米以内的照片默认共用一次地址查询，可通过 `LOCATION_CLUSTER_RADIUS_METERS` 调整。
 
 3. 运行对应系统的 `start` 脚本，浏览器会打开 <http://127.0.0.1:8000>。
 

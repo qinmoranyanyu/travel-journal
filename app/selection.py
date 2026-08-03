@@ -20,6 +20,11 @@ def select_story_set(photos: list[MediaPhoto], target_count: int) -> list[MediaP
         selected_categories = {
             item.analysis.category for item in selected if item.analysis is not None
         }
+        selected_locations = {
+            item.location.location_key
+            for item in selected
+            if item.location is not None and item.location.location_key
+        }
         selected_positions = [positions[item.id] for item in selected]
         best: MediaPhoto | None = None
         best_score = -1.0
@@ -43,11 +48,18 @@ def select_story_set(photos: list[MediaPhoto], target_count: int) -> list[MediaP
                 if analysis and analysis.category not in selected_categories
                 else 0.25
             )
+            if photo.location is None or not photo.location.location_key:
+                location_novelty = 0.5
+            elif photo.location.location_key not in selected_locations:
+                location_novelty = 1.0
+            else:
+                location_novelty = 0.2
             score = (
-                0.35 * story_value
-                + 0.25 * quality
-                + 0.20 * timeline_novelty
-                + 0.20 * category_novelty
+                0.32 * story_value
+                + 0.23 * quality
+                + 0.18 * timeline_novelty
+                + 0.15 * category_novelty
+                + 0.12 * location_novelty
             )
             if score > best_score:
                 best = photo
@@ -58,4 +70,3 @@ def select_story_set(photos: list[MediaPhoto], target_count: int) -> list[MediaP
         selected.append(best)
 
     return sorted(selected, key=photo_sort_key)
-

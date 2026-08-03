@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from PIL import Image
+from PIL.TiffImagePlugin import IFDRational
 
 from app.media import MediaPhoto, inspect_photo, near_duplicate_representatives
 
@@ -28,6 +29,26 @@ def test_falls_back_to_filename_time(tmp_path):
     assert photo.capture_time == datetime(2025, 7, 18, 14, 22, 33)
     assert photo.time_source == "filename"
     assert photo.time_confidence == "estimated"
+
+
+def test_extracts_exif_gps(tmp_path):
+    path = tmp_path / "gps-photo.jpg"
+    image = Image.new("RGB", (100, 80), "white")
+    exif = Image.Exif()
+    exif[34853] = {
+        1: "N",
+        2: (IFDRational(30), IFDRational(16), IFDRational(234, 10)),
+        3: "E",
+        4: (IFDRational(120), IFDRational(9), IFDRational(522, 10)),
+    }
+    image.save(path, exif=exif)
+
+    photo = inspect_photo(MediaPhoto("gps", path.name, path, 0))
+
+    assert photo.latitude == 30.2731667
+    assert photo.longitude == 120.1645
+    assert photo.gps_source == "exif_gps"
+    assert photo.gps_inspected is True
 
 
 def test_near_duplicates_keep_higher_quality(tmp_path):

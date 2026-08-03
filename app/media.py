@@ -11,6 +11,8 @@ import imagehash
 import numpy as np
 from PIL import Image, ImageOps
 
+from .models import PhotoLocation
+
 try:
     from pillow_heif import register_heif_opener
 
@@ -23,6 +25,11 @@ SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 EXIF_DATETIME_ORIGINAL = 36867
 EXIF_DATETIME_DIGITIZED = 36868
 EXIF_DATETIME = 306
+EXIF_GPS_INFO = 34853
+GPS_LATITUDE_REF = 1
+GPS_LATITUDE = 2
+GPS_LONGITUDE_REF = 3
+GPS_LONGITUDE = 4
 
 
 @dataclass
@@ -37,6 +44,11 @@ class MediaPhoto:
     capture_time: datetime | None = None
     time_source: str = "upload_order"
     time_confidence: str = "estimated"
+    latitude: float | None = None
+    longitude: float | None = None
+    gps_source: str = ""
+    gps_inspected: bool = False
+    location: PhotoLocation | None = None
     analysis_path: Path | None = None
     generation_path: Path | None = None
     phash: str = ""
@@ -94,6 +106,39 @@ def _parse_filename_time(filename: str) -> datetime | None:
     return None
 
 
+def _text_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode(errors="ignore")
+    return str(value or "")
+
+
+def _degrees_to_decimal(value: Any, reference: Any) -> float | None:
+    try:
+        degrees, minutes, seconds = value
+        decimal = float(degrees) + float(minutes) / 60 + float(seconds) / 3600
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if _text_value(reference).strip().upper() in {"S", "W"}:
+        decimal = -decimal
+    return decimal
+
+
+def _parse_exif_gps(exif: Any) -> tuple[float, float] | None:
+    try:
+        gps = exif.get_ifd(EXIF_GPS_INFO)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        gps = exif.get(EXIF_GPS_INFO, {}) if exif else {}
+    if not isinstance(gps, dict):
+        return None
+    latitude = _degrees_to_decimal(gps.get(GPS_LATITUDE), gps.get(GPS_LATITUDE_REF))
+    longitude = _degrees_to_decimal(gps.get(GPS_LONGITUDE), gps.get(GPS_LONGITUDE_REF))
+    if latitude is None or longitude is None:
+        return None
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        return None
+    return round(latitude, 7), round(longitude, 7)
+
+
 def inspect_photo(photo: MediaPhoto) -> MediaPhoto:
     with Image.open(photo.source_path) as raw:
         exif = raw.getexif()
@@ -104,6 +149,7 @@ def inspect_photo(photo: MediaPhoto) -> MediaPhoto:
         digitized = _parse_exif_time(exif.get(EXIF_DATETIME_DIGITIZED))
         generic = _parse_exif_time(exif.get(EXIF_DATETIME))
         filename_time = _parse_filename_time(photo.original_name)
+        gps = _parse_exif_gps(exif)
 
         if original:
             photo.capture_time, photo.time_source, photo.time_confidence = (
@@ -121,6 +167,15 @@ def inspect_photo(photo: MediaPhoto) -> MediaPhoto:
             photo.capture_time, photo.time_source = filename_time, "filename"
         elif photo.browser_modified_at:
             photo.capture_time, photo.time_source = photo.browser_modified_at, "file_modified"
+
+        if gps:
+            photo.latitude, photo.longitude = gps
+            photo.gps_source = "exif_gps"
+        else:
+            photo.latitude = None
+            photo.longitude = None
+            photo.gps_source = ""
+        photo.gps_inspected = True
 
         normalized = image.convert("RGB")
         thumb = normalized.copy()
@@ -198,4 +253,3 @@ def normalize_generated_page(source: Path, target: Path) -> None:
         y = (canvas.height - image.height) // 2
         canvas.paste(image, (x, y))
         canvas.save(target, "JPEG", quality=94, optimize=True)
-

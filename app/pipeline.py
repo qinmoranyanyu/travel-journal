@@ -8,6 +8,7 @@ from typing import Any
 
 from .ai import OpenAIService
 from .config import Settings
+from .geocoding import AmapReverseGeocoder, cluster_photos_by_location, haversine_meters
 from .jobs import Job, JobManager
 from .media import (
     MediaPhoto,
@@ -18,7 +19,7 @@ from .media import (
     normalize_generated_page,
     photo_sort_key,
 )
-from .models import AlbumManifest, ImageAnalysis, JobStatus, StoryPlan
+from .models import AlbumManifest, ImageAnalysis, JobStatus, PhotoLocation, StoryPlan
 from .rendering import (
     create_share_zip,
     export_share_images,
@@ -69,6 +70,14 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 message=f"正在整理第 {index + 1}/{len(photos)} 张照片",
             )
 
+        gps_photo_count = sum(_has_gps(photo) for photo in photos)
+        manager.update(
+            job,
+            gps_photo_count=gps_photo_count,
+            resolved_location_count=sum(photo.location is not None for photo in photos),
+            missing_gps_count=len(photos) - gps_photo_count,
+        )
+
         _check_pause(job)
         manager.update(job, stage="deduplicate", progress=18, message="正在过滤近似照片")
         photo_by_id = {photo.id: photo for photo in photos}
@@ -77,6 +86,16 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
         if not candidates:
             candidates = await asyncio.to_thread(near_duplicate_representatives, photos)
             _checkpoint(job, manager, candidate_ids=[photo.id for photo in candidates])
+
+        if int(job.pipeline_state.get("location_enrichment_version", 0)) < 1:
+            for photo in candidates:
+                photo.analysis = None
+            job.pipeline_state.pop("selected_ids", None)
+            job.pipeline_state.pop("story", None)
+            _checkpoint_photos(job, manager, photos)
+
+        await _resolve_photo_locations(job, manager, settings, photos, candidates)
+        _checkpoint(job, manager, location_enrichment_version=1)
 
         service = OpenAIService(settings)
         analyzed_count = sum(photo.analysis is not None for photo in candidates)
@@ -470,6 +489,17 @@ def _restore_media_photos(job: Job) -> list[MediaPhoto]:
                 ),
                 time_source=row.get("time_source", "upload_order"),
                 time_confidence=row.get("time_confidence", "estimated"),
+                latitude=(float(row["latitude"]) if row.get("latitude") is not None else None),
+                longitude=(
+                    float(row["longitude"]) if row.get("longitude") is not None else None
+                ),
+                gps_source=row.get("gps_source", ""),
+                gps_inspected=bool(row.get("gps_inspected", False)),
+                location=(
+                    PhotoLocation.model_validate(row["location"])
+                    if row.get("location")
+                    else None
+                ),
                 analysis_path=Path(row["analysis_path"]) if row.get("analysis_path") else None,
                 generation_path=(
                     Path(row["generation_path"]) if row.get("generation_path") else None
@@ -496,6 +526,11 @@ def _photo_state(photo: MediaPhoto) -> dict[str, Any]:
         "capture_time": photo.capture_time.isoformat() if photo.capture_time else None,
         "time_source": photo.time_source,
         "time_confidence": photo.time_confidence,
+        "latitude": photo.latitude,
+        "longitude": photo.longitude,
+        "gps_source": photo.gps_source,
+        "gps_inspected": photo.gps_inspected,
+        "location": photo.location.model_dump(mode="json") if photo.location else None,
         "analysis_path": str(photo.analysis_path) if photo.analysis_path else None,
         "generation_path": str(photo.generation_path) if photo.generation_path else None,
         "phash": photo.phash,
@@ -520,12 +555,113 @@ def _checkpoint(job: Job, manager: JobManager, **changes: Any) -> None:
 
 def _metadata_ready(photo: MediaPhoto) -> bool:
     return bool(
-        photo.phash
+        photo.gps_inspected
+        and photo.phash
         and photo.analysis_path
         and photo.analysis_path.exists()
         and photo.generation_path
         and photo.generation_path.exists()
     )
+
+
+def _has_gps(photo: MediaPhoto) -> bool:
+    return photo.latitude is not None and photo.longitude is not None
+
+
+async def _resolve_photo_locations(
+    job: Job,
+    manager: JobManager,
+    settings: Settings,
+    photos: list[MediaPhoto],
+    candidates: list[MediaPhoto],
+) -> None:
+    gps_candidates = [photo for photo in candidates if _has_gps(photo)]
+    clusters = cluster_photos_by_location(
+        gps_candidates,
+        settings.location_cluster_radius_meters,
+    )
+    resolved_count = sum(photo.location is not None for photo in photos)
+    manager.update(
+        job,
+        stage="location",
+        progress=19,
+        completed_items=sum(any(photo.location for photo in cluster) for cluster in clusters),
+        total_items=len(clusters),
+        resolved_location_count=resolved_count,
+        message=(
+            f"检测到 {job.snapshot.gps_photo_count} 张照片含 GPS，"
+            f"正在解析 {len(clusters)} 个拍摄地点"
+        ),
+    )
+    if not clusters:
+        manager.update(job, progress=21, message="照片中未检测到可用 GPS，已继续整理画面")
+        return
+
+    if not settings.location_configured:
+        manager.update(
+            job,
+            progress=21,
+            message="检测到照片 GPS，但未配置高德 Web 服务 Key，已跳过地址解析",
+        )
+        return
+
+    geocoder = AmapReverseGeocoder(settings.amap_api_key)
+    errors = dict(job.pipeline_state.get("location_errors", {}))
+    location_context_changed = False
+    for index, cluster in enumerate(clusters):
+        _check_pause(job)
+        location = next((photo.location for photo in cluster if photo.location), None)
+        representative = cluster[0]
+        error_key = f"{representative.latitude:.5f},{representative.longitude:.5f}"
+        if location is None:
+            try:
+                location = await asyncio.to_thread(
+                    geocoder.reverse,
+                    representative.latitude,
+                    representative.longitude,
+                )
+                errors.pop(error_key, None)
+            except Exception as exc:
+                errors[error_key] = str(exc)
+
+        if location is not None:
+            for photo in cluster:
+                if photo.location is None:
+                    photo.location = location
+                    photo.analysis = None
+                    location_context_changed = True
+            for photo in photos:
+                if (
+                    photo.location is None
+                    and haversine_meters(photo, representative)
+                    <= settings.location_cluster_radius_meters
+                ):
+                    photo.location = location
+
+        resolved_count = sum(photo.location is not None for photo in photos)
+        _checkpoint_photos(job, manager, photos)
+        _checkpoint(job, manager, location_errors=errors)
+        _check_pause(job)
+        manager.update(
+            job,
+            progress=19 + 2 * (index + 1) / len(clusters),
+            completed_items=index + 1,
+            resolved_location_count=resolved_count,
+            message=(
+                f"地点解析 {index + 1}/{len(clusters)}，"
+                f"已为 {resolved_count} 张照片补充地址"
+            ),
+        )
+
+    if location_context_changed:
+        job.pipeline_state.pop("selected_ids", None)
+        job.pipeline_state.pop("story", None)
+        _checkpoint_photos(job, manager, photos)
+    if errors:
+        manager.update(
+            job,
+            message=f"已解析 {resolved_count} 张照片的位置，{len(errors)} 个地点暂时查询失败",
+        )
 
 
 def _usable_file(path: Path) -> bool:
@@ -556,6 +692,16 @@ def _build_manifest(job: Job, photos: list[MediaPhoto], source_paths: dict[str, 
     else:
         date_range = "时间待考"
 
+    route_locations: list[str] = []
+    for photo in photos:
+        display_name = photo.location.display_name if photo.location else ""
+        if display_name and (not route_locations or route_locations[-1] != display_name):
+            route_locations.append(display_name)
+    visible_route = route_locations[:5]
+    route_summary = " / ".join(visible_route)
+    if len(route_locations) > len(visible_route):
+        route_summary += f" / 等 {len(route_locations)} 处"
+
     photo_rows = []
     for photo in photos:
         analysis = photo.analysis
@@ -569,6 +715,7 @@ def _build_manifest(job: Job, photos: list[MediaPhoto], source_paths: dict[str, 
                 "display_date": photo.capture_time.strftime("%Y.%m.%d") if photo.capture_time else "顺序记录",
                 "description": analysis.description if analysis else "旅行照片",
                 "category": analysis.category if analysis else "其他",
+                "display_location": photo.location.display_name if photo.location else "",
                 "caption": photo.caption,
                 "chapter_id": photo.chapter_id,
                 "image": f"assets/photos/{photo.id}.jpg",
@@ -598,6 +745,8 @@ def _build_manifest(job: Job, photos: list[MediaPhoto], source_paths: dict[str, 
         date_range=date_range,
         cover_subtitle=story.cover_subtitle,
         closing=story.closing,
+        route_locations=route_locations,
+        route_summary=route_summary,
         chapters=chapters,
         photos=photo_rows,
     )

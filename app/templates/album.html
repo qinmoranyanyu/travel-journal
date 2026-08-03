@@ -14,6 +14,7 @@
       <p class="cover__place">{{ album.location or "沿途手记" }}</p>
       <h1>{{ album.title }}</h1>
       {% if album.cover_subtitle %}<p class="cover__subtitle">{{ album.cover_subtitle }}</p>{% endif %}
+      {% if album.route_summary %}<p class="cover__route">{{ album.route_summary }}</p>{% endif %}
     </div>
     <div class="cover__footer">
       <span>{{ album.date_range }}</span>
@@ -37,7 +38,10 @@
         <figure class="memory memory--{{ loop.index0 % 3 }}">
           <img src="{{ photo.image }}" alt="{{ photo.description }}" loading="lazy" width="1024" height="1365">
           <figcaption>
-            <span class="memory__date">{{ photo.display_date }}</span>
+            <span class="memory__meta">
+              <span class="memory__date">{{ photo.display_date }}</span>
+              {% if photo.display_location %}<span class="memory__location">{{ photo.display_location }}</span>{% endif %}
+            </span>
             <span class="memory__caption">{{ photo.caption }}</span>
           </figcaption>
         </figure>
@@ -55,4 +59,3 @@
   </footer>
 </body>
 </html>
-

@@ -33,7 +33,9 @@ class OpenAIService:
                 "type": "text",
                 "text": (
                     "分析以下旅行照片。为每张照片返回客观、简洁的数据，不猜测人物姓名、对话、"
-                    "具体事件或不可见地点。category 使用人物、风景、建筑、食物、交通、细节、活动、其他之一。"
+                    "具体事件或未提供的地点。capture_location 来自照片 EXIF GPS 的地址解析，"
+                    "属于可信元数据，可用于描述地点氛围，但不要补充元数据中没有的地名。"
+                    "category 使用人物、风景、建筑、食物、交通、细节、活动、其他之一。"
                     "story_value 和 technical_quality 是 0 到 1 的小数。输出 JSON："
                     '{"photos":[{"photo_id":"...","description":"...","category":"...",'
                     '"story_value":0.5,"technical_quality":0.5,"memorable_details":["..."],'
@@ -44,7 +46,15 @@ class OpenAIService:
         for photo in photos:
             if photo.analysis_path is None:
                 continue
-            content.append({"type": "text", "text": f"photo_id: {photo.id}"})
+            metadata: dict[str, Any] = {"photo_id": photo.id}
+            if photo.location:
+                metadata["capture_location"] = photo.location.model_dump(
+                    mode="json",
+                    exclude={"provider", "confidence", "location_key"},
+                )
+            content.append(
+                {"type": "text", "text": json.dumps(metadata, ensure_ascii=False)}
+            )
             content.append(
                 {
                     "type": "image_url",
@@ -87,6 +97,14 @@ class OpenAIService:
                     "photo_id": photo.id,
                     "time": photo.capture_time.isoformat() if photo.capture_time else None,
                     "time_confidence": photo.time_confidence,
+                    "capture_location": (
+                        photo.location.model_dump(
+                            mode="json",
+                            exclude={"provider", "confidence", "location_key"},
+                        )
+                        if photo.location
+                        else None
+                    ),
                     "description": analysis.description if analysis else "",
                     "category": analysis.category if analysis else "其他",
                     "details": (analysis.memorable_details if analysis else [])[:3],
@@ -102,6 +120,8 @@ class OpenAIService:
                 "章节数量随内容决定，通常 1-6 个。",
                 "章节引言 40-80 字，每张旁白 10-30 字，结尾 80-150 字。",
                 "联系相邻照片形成叙事，但不编造姓名、对话、具体事件或无依据地点。",
+                "capture_location 来自照片 GPS，可用于章节划分、标题和旁白；trip.location 是用户确认的旅行级事实，二者冲突时优先采用 trip.location，并避免断言矛盾地点。",
+                "地点措辞应自然克制，优先使用城市、区域或景点名称，不在旁白中堆砌完整门牌地址。",
                 "避免时光定格、岁月静好、奔赴山海等套话。",
                 "时间可信度为 estimated 时，不写清晨、傍晚、第二天等具体推断。",
             ],
@@ -139,6 +159,7 @@ class OpenAIService:
         analysis = photo.analysis
         details = "、".join((analysis.memorable_details if analysis else [])[:3])
         date_note = photo.capture_time.strftime("%Y.%m.%d") if photo.capture_time else "FIELD NOTE"
+        location_note = photo.location.display_name if photo.location else ""
         prompt = (
             "Follow the Photo Revival skill below exactly.\n\n"
             f"{self.photo_revival_rules}\n\n"
@@ -146,6 +167,7 @@ class OpenAIService:
             f"Preserve the recognizable subject and spatial relationship: "
             f"{analysis.description if analysis else photo.original_name}.\n"
             f"Memorable details to preserve: {details or 'the main subject and atmosphere'}.\n"
+            f"Known capture location for visual context: {location_note or 'not available'}.\n"
             f"Tiny handwritten Chinese caption: {caption}\n"
             f"Tiny English field note/date: FIELD NOTE / {date_note}\n"
         )

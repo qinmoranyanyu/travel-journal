@@ -12,6 +12,7 @@ from app.models import (
     ImageAnalysis,
     JobSnapshot,
     JobStatus,
+    PhotoLocation,
     StoryChapter,
     StoryPlan,
 )
@@ -105,6 +106,61 @@ class NoCallService:
 
     def generate_revival(self, photo, caption, output_path: Path):
         raise AssertionError("completed image was generated again")
+
+
+class RecordingGeocoder:
+    calls: list[tuple[float, float]] = []
+
+    def __init__(self, api_key: str) -> None:
+        assert api_key == "amap-test"
+
+    def reverse(self, latitude: float, longitude: float) -> PhotoLocation:
+        type(self).calls.append((latitude, longitude))
+        return PhotoLocation(
+            province="浙江省",
+            city="杭州市",
+            district="西湖区",
+            poi_name="孤山",
+            formatted_address="浙江省杭州市西湖区孤山路",
+            display_name="杭州 · 孤山",
+            location_key="浙江省|杭州市|西湖区|孤山",
+            confidence="poi",
+        )
+
+
+def test_location_resolution_clusters_requests_and_checkpoints(monkeypatch, tmp_path):
+    settings = Settings(amap_api_key="amap-test", location_cluster_radius_meters=200)
+    job = Job(
+        snapshot=JobSnapshot(id="location-job", gps_photo_count=2),
+        album_input=AlbumInput(title="location album", target_count=1),
+        workspace=tmp_path,
+    )
+    photos = [
+        pipeline.MediaPhoto("one", "one.jpg", tmp_path / "one.jpg", 0),
+        pipeline.MediaPhoto("two", "two.jpg", tmp_path / "two.jpg", 1),
+    ]
+    photos[0].latitude, photos[0].longitude = 30.2731, 120.1645
+    photos[1].latitude, photos[1].longitude = 30.2735, 120.1648
+    for photo in photos:
+        photo.gps_inspected = True
+
+    RecordingGeocoder.calls = []
+    monkeypatch.setattr(pipeline, "AmapReverseGeocoder", RecordingGeocoder)
+
+    asyncio.run(
+        pipeline._resolve_photo_locations(
+            job,
+            RecordingManager(),
+            settings,
+            photos,
+            photos,
+        )
+    )
+
+    assert RecordingGeocoder.calls == [(30.2731, 120.1645)]
+    assert {photo.location.display_name for photo in photos} == {"杭州 · 孤山"}
+    assert job.snapshot.resolved_location_count == 2
+    assert job.pipeline_state["photos"][0]["latitude"] == 30.2731
 
 
 def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):

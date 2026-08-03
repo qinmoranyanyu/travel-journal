@@ -119,10 +119,24 @@ def _chapter_photos(data: dict) -> list[dict]:
     photos = {photo["id"]: photo for photo in data["photos"]}
     chapters = []
     for chapter in data["chapters"]:
+        chapter_rows = []
+        previous_location = ""
+        for index, photo_id in enumerate(chapter["photo_ids"]):
+            if photo_id not in photos:
+                continue
+            photo = dict(photos[photo_id])
+            display_location = photo.get("display_location", "")
+            photo["show_share_location"] = bool(
+                display_location
+                and (index == 0 or display_location != previous_location)
+            )
+            if display_location:
+                previous_location = display_location
+            chapter_rows.append(photo)
         chapters.append(
             {
                 **chapter,
-                "photos": [photos[photo_id] for photo_id in chapter["photo_ids"] if photo_id in photos],
+                "photos": chapter_rows,
             }
         )
     return chapters

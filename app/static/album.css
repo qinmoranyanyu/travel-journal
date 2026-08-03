@@ -52,6 +52,7 @@ body { margin: 0; background: var(--paper); }
   overflow-wrap: anywhere;
 }
 .cover__subtitle { max-width: 680px; margin: 28px 0 0; font-size: 20px; line-height: 1.8; }
+.cover__route { max-width: 780px; margin: 20px 0 0; color: var(--moss); font: 12px/1.7 "Segoe UI", sans-serif; }
 .cover__footer { display: flex; justify-content: space-between; gap: 24px; border-top: 1px solid var(--line); padding-top: 16px; }
 
 main { border-top: 1px solid var(--line); }
@@ -73,6 +74,8 @@ main { border-top: 1px solid var(--line); }
 .memory--2 { justify-self: center; width: min(520px, 100%); }
 .memory img { width: 100%; height: auto; aspect-ratio: 3 / 4; object-fit: cover; display: block; box-shadow: 0 16px 50px rgb(31 38 34 / 8%); }
 .memory figcaption { margin-top: 18px; display: grid; grid-template-columns: 110px 1fr; gap: 22px; align-items: start; }
+.memory__meta { display: grid; gap: 7px; }
+.memory__location { color: var(--vermilion); font-size: 12px; line-height: 1.5; }
 .memory__caption { line-height: 1.75; }
 
 .closing { min-height: 72vh; padding: 120px 24px 64px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; border-top: 6px solid var(--sky); }
@@ -95,4 +98,3 @@ main { border-top: 1px solid var(--line); }
 }
 
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-

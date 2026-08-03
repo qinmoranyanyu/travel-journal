@@ -9,6 +9,7 @@ body { margin: 0; padding: 40px 20px; }
 .share-cover__center > p { color: #c8553d; font-size: 20px; }
 .share-cover h1 { max-width: 850px; margin: 22px 0 34px; font: 700 82px/1.08 "STKaiti", "KaiTi", serif; overflow-wrap: anywhere; }
 .share-cover blockquote { max-width: 730px; margin: 0; font-size: 27px; line-height: 1.8; }
+.share-cover__center .share-cover__route { max-width: 760px; margin: 30px 0 0; color: #49675a; font: 16px/1.7 "Segoe UI", sans-serif; }
 .share-cover footer { border-top: 1px solid #d8ddd8; padding-top: 20px; display: flex; justify-content: space-between; }
 .share-chapter { border-top: 14px solid #91b8c2; }
 .share-chapter header { display: grid; grid-template-columns: 110px 1fr; gap: 30px; margin-bottom: 70px; }
@@ -18,4 +19,7 @@ body { margin: 0; padding: 40px 20px; }
 .share-grid figure { margin: 0; }
 .share-grid img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; box-shadow: 0 12px 34px rgb(31 38 34 / 8%); }
 .share-grid figcaption { margin-top: 14px; display: grid; grid-template-columns: 86px 1fr; gap: 12px; font-size: 16px; line-height: 1.6; }
+.share-photo__meta { display: grid; align-content: start; gap: 6px; }
+.share-photo__meta em { color: #c8553d; font-style: normal; line-height: 1.45; }
+.share-photo__caption { color: #1f2622; font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif; }
 .share-closing { margin: 80px 0 10px 148px; padding-top: 40px; border-top: 1px solid #d8ddd8; font: 25px/1.8 "STKaiti", "KaiTi", serif; }
