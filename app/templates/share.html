@@ -32,11 +32,16 @@
       <figure>
         <img src="{{ photo.image }}" alt="">
         <figcaption>
-          <span class="share-photo__meta">
-            <span>{{ photo.display_date }}</span>
-            {% if photo.show_share_location %}<em>{{ photo.display_location }}</em>{% endif %}
-          </span>
-          <span class="share-photo__caption">{{ photo.caption }}</span>
+          <span class="share-photo__date">{{ photo.display_date }}</span>
+          <div class="share-photo__body">
+            <span class="share-photo__caption">{{ photo.caption }}</span>
+            {% if photo.show_share_locations %}
+            <dl class="share-photo__locations">
+              {% if photo.capture_location %}<div><dt class="share-location-label share-location-label--at">AT</dt><dd>{{ photo.capture_location }}</dd></div>{% endif %}
+              {% if photo.nearby_landmark %}<div><dt class="share-location-label share-location-label--near">NEAR</dt><dd>{{ photo.nearby_landmark }}</dd></div>{% endif %}
+            </dl>
+            {% endif %}
+          </div>
         </figcaption>
       </figure>
       {% endfor %}

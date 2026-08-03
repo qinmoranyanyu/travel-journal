@@ -74,9 +74,15 @@ main { border-top: 1px solid var(--line); }
 .memory--2 { justify-self: center; width: min(520px, 100%); }
 .memory img { width: 100%; height: auto; aspect-ratio: 3 / 4; object-fit: cover; display: block; box-shadow: 0 16px 50px rgb(31 38 34 / 8%); }
 .memory figcaption { margin-top: 18px; display: grid; grid-template-columns: 110px 1fr; gap: 22px; align-items: start; }
-.memory__meta { display: grid; gap: 7px; }
-.memory__location { color: var(--vermilion); font-size: 12px; line-height: 1.5; }
+.memory__body { min-width: 0; display: grid; gap: 10px; }
 .memory__caption { line-height: 1.75; }
+.memory__locations { margin: 0; display: grid; gap: 4px; }
+.memory__locations > div { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.memory__locations dt, .memory__locations dd { margin: 0; }
+.memory__locations dd { color: var(--ink); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.location-label { font: 700 10px/1.5 "Segoe UI", sans-serif; }
+.location-label--at { color: var(--vermilion); }
+.location-label--near { color: var(--moss); }
 
 .closing { min-height: 72vh; padding: 120px 24px 64px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; border-top: 6px solid var(--sky); }
 .closing blockquote { max-width: 720px; margin: 32px 0; font-family: "STKaiti", "KaiTi", serif; font-size: 30px; line-height: 1.7; }

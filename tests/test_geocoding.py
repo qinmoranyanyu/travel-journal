@@ -5,9 +5,11 @@ import pytest
 from app.geocoding import (
     cluster_photos_by_location,
     parse_amap_location,
+    parse_amap_nearby,
     wgs84_to_gcj02,
 )
 from app.media import MediaPhoto
+from app.models import PhotoLocation
 
 
 def make_photo(photo_id: str, latitude: float, longitude: float) -> MediaPhoto:
@@ -67,6 +69,82 @@ def test_amap_response_ignores_distant_poi():
     assert location.display_name == "杭州 · 北山街道"
     assert location.poi_name == ""
     assert location.confidence == "address"
+
+
+def test_nearby_landmark_prefers_category_then_rating_then_distance():
+    landmark = parse_amap_nearby(
+        {
+            "status": "1",
+            "pois": [
+                {
+                    "name": "北山公园",
+                    "distance": "120",
+                    "type": "风景名胜;公园广场;公园",
+                    "typecode": "110101",
+                    "biz_ext": {"rating": "4.9"},
+                },
+                {
+                    "name": "西湖国家级风景名胜区",
+                    "distance": "2200",
+                    "type": "风景名胜;风景名胜;国家级景点",
+                    "typecode": "110202",
+                    "biz_ext": {"rating": "4.6"},
+                },
+            ],
+        },
+        PhotoLocation(poi_name="曲院风荷"),
+    )
+
+    assert landmark is not None
+    assert landmark.name == "西湖国家级风景名胜区"
+    assert landmark.category == "重要景区"
+    assert landmark.distance_meters == 2200
+    assert landmark.rating == 4.6
+
+
+def test_nearby_landmark_omits_capture_poi_and_low_confidence_places():
+    landmark = parse_amap_nearby(
+        {
+            "status": "1",
+            "pois": [
+                {
+                    "name": "孤山",
+                    "distance": "80",
+                    "type": "风景名胜;风景名胜",
+                    "typecode": "110200",
+                },
+                {
+                    "name": "某便利店",
+                    "distance": "40",
+                    "type": "购物服务;便民商店",
+                    "typecode": "060200",
+                },
+                {
+                    "name": "某培训学校",
+                    "distance": "300",
+                    "type": "科教文化服务;培训机构",
+                    "typecode": "141400",
+                },
+                {
+                    "name": "某景区-日落时刻(打卡点)",
+                    "distance": "180",
+                    "type": "风景名胜;风景名胜;观景点",
+                    "typecode": "110209",
+                    "biz_ext": {"rating": "4.9"},
+                },
+                {
+                    "name": "无名小景",
+                    "distance": "100",
+                    "type": "风景名胜;风景名胜相关;旅游景点",
+                    "typecode": "110000",
+                    "biz_ext": {"rating": "3.2"},
+                },
+            ],
+        },
+        PhotoLocation(poi_name="孤山"),
+    )
+
+    assert landmark is None
 
 
 def test_nearby_photos_share_a_location_cluster():

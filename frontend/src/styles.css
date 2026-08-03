@@ -38,8 +38,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .section-heading > strong { color: var(--red); font: 600 25px/1 "Segoe UI", sans-serif; }
 .section-heading--dark span { color: #93a79c; }
 
-.quiet-button { display: inline-flex; align-items: center; gap: 7px; padding: 7px 0; color: var(--moss); background: transparent; border: 0; cursor: pointer; font-size: 13px; }
-.quiet-button:disabled { opacity: .4; cursor: not-allowed; }
+.new-task-button { flex: none; min-height: 40px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: white; background: var(--red); border: 1px solid var(--red); border-radius: 4px; box-shadow: 0 5px 14px rgb(91 48 38 / 18%); cursor: pointer; font-size: 13px; font-weight: 700; white-space: nowrap; transition: background .16s ease, border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.new-task-button:hover { background: #a94433; border-color: #a94433; box-shadow: 0 7px 18px rgb(91 48 38 / 24%); }
+.new-task-button:active { transform: translateY(1px); }
+.new-task-button:disabled { opacity: .45; box-shadow: none; cursor: not-allowed; }
 .dropzone { min-height: 290px; padding: 22px; display: grid; grid-template-rows: 1fr auto; align-items: center; border: 1px dashed #99aaa1; background: #f4f7f5; transition: border-color .18s ease, background .18s ease; }
 .dropzone.is-dragging { border-color: var(--red); background: #f9eeeb; }
 .dropzone.has-files { min-height: 340px; }

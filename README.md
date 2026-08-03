@@ -19,6 +19,7 @@ OPENAI_TEXT_MODEL=支持图片理解的文本模型
 OPENAI_IMAGE_MODEL=gpt-image-1
 AMAP_API_KEY=高德Web服务Key
 IMAGE_GENERATION_INTERVAL_SECONDS=10
+IMAGE_GENERATION_CONCURRENCY=3
 ```
 
 ```text
@@ -31,9 +32,9 @@ IMAGE_GENERATION_INTERVAL_SECONDS=10
 申请后把 Key 放进项目根目录 .env：
 ```
 
-照片含有 EXIF GPS 时，应用会使用高德逆地理编码补充城市、区域和附近景点，地点会参与选片、章节编排与旁白生成。前往[高德开放平台控制台](https://console.amap.com/dev/key/app)创建应用并添加 Key，服务平台选择“Web 服务”。配置后需要重启应用；`AMAP_API_KEY` 未配置或地址查询失败时会跳过地点增强，不影响相册生成。
+照片含有 EXIF GPS 时，应用会使用高德逆地理编码补充拍摄地（`AT`），并从约 3 公里范围内筛选有叙事价值的景区、公园、博物馆、历史文化和自然地标（`NEAR`）。附近地标只作为地理参照，文案不会将其表述为实际拍摄地或已到访地点；没有可信候选时不会显示 `NEAR`。地点会参与选片、章节编排与旁白生成。前往[高德开放平台控制台](https://console.amap.com/dev/key/app)创建应用并添加 Key，服务平台选择“Web 服务”。配置后需要重启应用；`AMAP_API_KEY` 未配置或地址查询失败时会跳过地点增强，不影响相册生成。
 
-EXIF 原始经纬度仅保存在本机 `.jobs/` 的任务断点中；公开的 Web 页面、`album.json`、长图和分享 ZIP 只包含简短地点名称。相距 200 米以内的照片默认共用一次地址查询，可通过 `LOCATION_CLUSTER_RADIUS_METERS` 调整。
+EXIF 原始经纬度、完整地址及附近地标的距离和评分仅保存在本机 `.jobs/` 的任务断点中；公开的 Web 页面、`album.json`、长图和分享 ZIP 只包含简短地点名称。相距 200 米以内的照片默认共用一次拍摄地查询和一次附近地标查询，可通过 `LOCATION_CLUSTER_RADIUS_METERS` 调整。相册封面路线只使用 `AT`，分享长图会省略连续重复的 `AT / NEAR` 组合。
 
 3. 运行对应系统的 `start` 脚本，浏览器会打开 <http://127.0.0.1:8000>。
 
@@ -52,7 +53,9 @@ exports/                朋友圈章节长图
 <旅行名称>.zip          不含 sources 的分享包
 ```
 
-同一时间只执行一个相册任务，入选照片也会逐张串行生成。`IMAGE_GENERATION_INTERVAL_SECONDS` 控制相邻两次图片请求之间的等待秒数。刷新或关闭浏览器不会停止任务；停止 FastAPI 后，未完成任务会标记为中断，不会自动续跑。
+同一时间只执行一个相册任务，入选照片会按受控批次并发生成。`IMAGE_GENERATION_CONCURRENCY` 控制每批同时生成的图片数，默认是 `3`，设为 `1` 可恢复串行；`IMAGE_GENERATION_INTERVAL_SECONDS` 控制相邻批次之间的等待秒数。暂停任务或终止重试时，当前批次中已经发出的请求会先结束，但不会继续启动下一批。刷新或关闭浏览器不会停止任务；停止 FastAPI 后，未完成任务会标记为中断，不会自动续跑。
+
+生成图片内部的手写短句仍按单张画面独立创作；Web 相册和分享长图中每张照片下方使用另一组诗行，按照片顺序连起来构成一首风格统一的完整诗。
 
 ## 日志
 

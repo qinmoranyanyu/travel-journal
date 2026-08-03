@@ -97,7 +97,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             candidates = await asyncio.to_thread(near_duplicate_representatives, photos)
             _checkpoint(job, manager, candidate_ids=[photo.id for photo in candidates])
 
-        if int(job.pipeline_state.get("location_enrichment_version", 0)) < 1:
+        if int(job.pipeline_state.get("location_enrichment_version", 0)) < 2:
             for photo in candidates:
                 photo.analysis = None
             job.pipeline_state.pop("selected_ids", None)
@@ -105,7 +105,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             _checkpoint_photos(job, manager, photos)
 
         await _resolve_photo_locations(job, manager, settings, photos, candidates)
-        _checkpoint(job, manager, location_enrichment_version=1)
+        _checkpoint(job, manager, location_enrichment_version=2)
 
         service = OpenAIService(settings)
         analyzed_count = sum(photo.analysis is not None for photo in candidates)
@@ -146,19 +146,29 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
 
         _check_pause(job)
         manager.update(job, stage="story", progress=46, message="正在编排旅行章节与旁白")
-        story_data = job.pipeline_state.get("story")
+        story_data = (
+            job.pipeline_state.get("story")
+            if int(job.pipeline_state.get("story_content_version", 0)) >= 2
+            else None
+        )
         if story_data:
             story = StoryPlan.model_validate(story_data)
         else:
             context = job.album_input.model_dump()
             story = await asyncio.to_thread(service.create_story, selected, context)
-            _checkpoint(job, manager, story=story.model_dump(mode="json"))
+            _checkpoint(
+                job,
+                manager,
+                story=story.model_dump(mode="json"),
+                story_content_version=2,
+            )
         chapter_by_photo: dict[str, str] = {}
         for chapter in story.chapters:
             for photo_id in chapter.photo_ids:
                 chapter_by_photo[photo_id] = chapter.id
         for photo in selected:
             photo.caption = story.captions.get(photo.id, photo.analysis.caption_seed)
+            photo.poem_line = story.poem_lines.get(photo.id, "")
             photo.chapter_id = chapter_by_photo.get(photo.id, story.chapters[-1].id)
         _checkpoint_photos(job, manager, photos)
 
@@ -188,14 +198,21 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             progress=50,
             completed_items=0,
             total_items=len(selected),
-            message=f"正在生成第 1/{len(selected)} 张手绘照片",
+            message=(
+                f"正在并发生成 {len(selected)} 张手绘照片，"
+                f"并发度 {settings.image_generation_concurrency}"
+            ),
         )
-        generation_attempted = False
+        generation_batch_attempted = False
         generation_errors = dict(job.pipeline_state.get("generation_errors", {}))
+        generation_concurrency = settings.image_generation_concurrency
 
-        async def wait_for_generation_slot(waiting_message: str, allow_stop: bool) -> bool:
-            nonlocal generation_attempted
-            if generation_attempted and settings.image_generation_interval_seconds > 0:
+        async def wait_for_generation_batch(
+            waiting_message: str,
+            allow_stop: bool,
+        ) -> bool:
+            nonlocal generation_batch_attempted
+            if generation_batch_attempted and settings.image_generation_interval_seconds > 0:
                 manager.update(job, message=waiting_message)
                 if not await _wait_for_job_delay(
                     job,
@@ -204,11 +221,12 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 ):
                     return False
             _check_pause(job)
-            return not (allow_stop and job.stop_retry_event.is_set())
+            if allow_stop and job.stop_retry_event.is_set():
+                return False
+            generation_batch_attempted = True
+            return True
 
         async def generate_photo(photo: MediaPhoto) -> None:
-            nonlocal generation_attempted
-            generation_attempted = True
             raw_path = job.workspace / "generated" / f"{photo.id}.png"
             final_path = photos_dir / f"{photo.id}.jpg"
             temporary_path = photos_dir / f"{photo.id}.tmp.jpg"
@@ -222,40 +240,94 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             temporary_path.replace(final_path)
             photo.generated_path = final_path
 
+        async def run_generation_batch(
+            batch: list[MediaPhoto],
+            pass_name: str,
+            retry_round: int = 0,
+        ) -> None:
+            logger.info(
+                "image_generation_batch_started job_id=%s pass=%s retry_round=%d "
+                "batch_size=%d concurrency=%d",
+                job.snapshot.id,
+                pass_name,
+                retry_round,
+                len(batch),
+                generation_concurrency,
+            )
+
+            async def run_one(photo: MediaPhoto) -> tuple[MediaPhoto, Exception | None]:
+                try:
+                    await generate_photo(photo)
+                    return photo, None
+                except Exception as exc:
+                    logger.warning(
+                        "image_generation_failed job_id=%s photo_id=%s pass=%s "
+                        "retry_round=%d error_type=%s error=%s",
+                        job.snapshot.id,
+                        photo.id,
+                        pass_name,
+                        retry_round,
+                        type(exc).__name__,
+                        exc,
+                        exc_info=True,
+                    )
+                    return photo, exc
+
+            results = await asyncio.gather(*(run_one(photo) for photo in batch))
+            success_count = 0
+            for photo, error in results:
+                if error is None:
+                    generation_errors.pop(photo.id, None)
+                    success_count += 1
+                else:
+                    generation_errors[photo.id] = str(error)
+            logger.info(
+                "image_generation_batch_completed job_id=%s pass=%s retry_round=%d "
+                "batch_size=%d success_count=%d failure_count=%d",
+                job.snapshot.id,
+                pass_name,
+                retry_round,
+                len(batch),
+                success_count,
+                len(batch) - success_count,
+            )
+
         if not job.pipeline_state.get("generation_first_pass_complete"):
             initial_queue = [photo for photo in selected if photo.generated_path is None]
-            for index, photo in enumerate(initial_queue):
+            processed = 0
+            for start in range(0, len(initial_queue), generation_concurrency):
                 _check_pause(job)
-                await wait_for_generation_slot(
+                batch = initial_queue[start : start + generation_concurrency]
+                batch_number = start // generation_concurrency + 1
+                batch_count = max(
+                    1,
+                    (len(initial_queue) + generation_concurrency - 1)
+                    // generation_concurrency,
+                )
+                await wait_for_generation_batch(
                     (
-                        f"等待 {settings.image_generation_interval_seconds:g} 秒后生成"
-                        f"第 {index + 1}/{len(initial_queue)} 张照片"
+                        f"等待 {settings.image_generation_interval_seconds:g} 秒后启动"
+                        f"首轮第 {batch_number}/{batch_count} 批"
                     ),
                     allow_stop=False,
                 )
-                try:
-                    await generate_photo(photo)
-                    generation_errors.pop(photo.id, None)
-                except Exception as exc:
-                    logger.warning(
-                        "image_generation_failed job_id=%s photo_id=%s pass=initial",
-                        job.snapshot.id,
-                        photo.id,
-                        exc_info=True,
-                    )
-                    generation_errors[photo.id] = str(exc)
+                await run_generation_batch(batch, "initial")
+                processed += len(batch)
                 _checkpoint_photos(job, manager, photos)
                 _checkpoint(job, manager, generation_errors=generation_errors)
-                _check_pause(job)
                 completed = len(selected) - len(
                     [item for item in selected if item.generated_path is None]
                 )
                 manager.update(
                     job,
-                    completed_items=index + 1,
-                    progress=50 + 38 * (index + 1) / max(1, len(initial_queue)),
-                    message=f"首轮已处理 {index + 1}/{len(initial_queue)} 张照片，成功 {completed} 张",
+                    completed_items=processed,
+                    progress=50 + 38 * processed / max(1, len(initial_queue)),
+                    message=(
+                        f"首轮已处理 {processed}/{len(initial_queue)} 张照片，"
+                        f"成功 {completed} 张"
+                    ),
                 )
+                _check_pause(job)
             _checkpoint(job, manager, generation_first_pass_complete=True)
 
         pending = [photo for photo in selected if photo.generated_path is None]
@@ -274,31 +346,29 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 message=f"第 {retry_round} 轮重试：还有 {len(pending)} 张照片未成功",
             )
             current_round = list(pending)
-            for index, photo in enumerate(current_round):
+            processed = 0
+            for start in range(0, len(current_round), generation_concurrency):
                 _check_pause(job)
                 if job.stop_retry_event.is_set():
                     break
-                should_continue = await wait_for_generation_slot(
+                batch = current_round[start : start + generation_concurrency]
+                batch_number = start // generation_concurrency + 1
+                batch_count = max(
+                    1,
+                    (len(current_round) + generation_concurrency - 1)
+                    // generation_concurrency,
+                )
+                should_continue = await wait_for_generation_batch(
                     (
-                        f"等待 {settings.image_generation_interval_seconds:g} 秒后进行"
-                        f"第 {retry_round} 轮的 {index + 1}/{len(current_round)} 项重试"
+                        f"等待 {settings.image_generation_interval_seconds:g} 秒后启动"
+                        f"第 {retry_round} 轮重试的第 {batch_number}/{batch_count} 批"
                     ),
                     allow_stop=True,
                 )
                 if not should_continue:
                     break
-                try:
-                    await generate_photo(photo)
-                    generation_errors.pop(photo.id, None)
-                except Exception as exc:
-                    logger.warning(
-                        "image_generation_failed job_id=%s photo_id=%s pass=retry retry_round=%d",
-                        job.snapshot.id,
-                        photo.id,
-                        retry_round,
-                        exc_info=True,
-                    )
-                    generation_errors[photo.id] = str(exc)
+                await run_generation_batch(batch, "retry", retry_round)
+                processed += len(batch)
                 _checkpoint_photos(job, manager, photos)
                 _checkpoint(
                     job,
@@ -306,16 +376,19 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     generation_errors=generation_errors,
                     retry_round=retry_round,
                 )
-                _check_pause(job)
                 remaining = sum(photo.generated_path is None for photo in selected)
                 manager.update(
                     job,
-                    completed_items=index + 1,
+                    completed_items=processed,
                     failed_items=remaining,
                     progress=89,
                     can_stop_retries=True,
-                    message=f"第 {retry_round} 轮已重试 {index + 1}/{len(current_round)} 张，还剩 {remaining} 张",
+                    message=(
+                        f"第 {retry_round} 轮已重试 {processed}/{len(current_round)} 张，"
+                        f"还剩 {remaining} 张"
+                    ),
                 )
+                _check_pause(job)
             pending = [photo for photo in selected if photo.generated_path is None]
 
         skipped_ids = set(job.pipeline_state.get("skipped_generation_ids", []))
@@ -557,6 +630,7 @@ def _restore_media_photos(job: Job) -> list[MediaPhoto]:
                     generated_path if generated_path and _usable_file(generated_path) else None
                 ),
                 caption=row.get("caption", ""),
+                poem_line=row.get("poem_line", ""),
                 chapter_id=row.get("chapter_id", ""),
             )
         )
@@ -584,6 +658,7 @@ def _photo_state(photo: MediaPhoto) -> dict[str, Any]:
         "analysis": analysis.model_dump(mode="json") if isinstance(analysis, ImageAnalysis) else None,
         "generated_path": str(photo.generated_path) if photo.generated_path else None,
         "caption": photo.caption,
+        "poem_line": photo.poem_line,
         "chapter_id": photo.chapter_id,
     }
 
@@ -654,11 +729,15 @@ async def _resolve_photo_locations(
     geocoder = AmapReverseGeocoder(settings.amap_api_key)
     errors = dict(job.pipeline_state.get("location_errors", {}))
     location_context_changed = False
+    candidate_ids = {photo.id for photo in candidates}
     for index, cluster in enumerate(clusters):
         _check_pause(job)
         location = next((photo.location for photo in cluster if photo.location), None)
         representative = cluster[0]
         error_key = f"{representative.latitude:.5f},{representative.longitude:.5f}"
+        reverse_error_key = f"{error_key}:reverse"
+        nearby_error_key = f"{error_key}:nearby"
+        cluster_context_changed = location is None
         if location is None:
             try:
                 location = await asyncio.to_thread(
@@ -666,30 +745,58 @@ async def _resolve_photo_locations(
                     representative.latitude,
                     representative.longitude,
                 )
+                errors.pop(reverse_error_key, None)
                 errors.pop(error_key, None)
             except Exception as exc:
                 logger.warning(
-                    "location_lookup_failed job_id=%s cluster=%d/%d",
+                    "location_lookup_failed job_id=%s cluster=%d/%d "
+                    "error_type=%s error=%s",
                     job.snapshot.id,
                     index + 1,
                     len(clusters),
+                    type(exc).__name__,
+                    exc,
                     exc_info=True,
                 )
-                errors[error_key] = str(exc)
+                errors[reverse_error_key] = str(exc)
+
+        if location is not None and not location.nearby_searched:
+            try:
+                landmark = await asyncio.to_thread(
+                    geocoder.nearby,
+                    representative.latitude,
+                    representative.longitude,
+                    location,
+                )
+                location.nearby_landmark = landmark
+                location.nearby_searched = True
+                cluster_context_changed = cluster_context_changed or landmark is not None
+                errors.pop(nearby_error_key, None)
+            except Exception as exc:
+                logger.warning(
+                    "nearby_landmark_lookup_failed job_id=%s cluster=%d/%d "
+                    "error_type=%s error=%s",
+                    job.snapshot.id,
+                    index + 1,
+                    len(clusters),
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                )
+                errors[nearby_error_key] = str(exc)
 
         if location is not None:
-            for photo in cluster:
-                if photo.location is None:
-                    photo.location = location
-                    photo.analysis = None
-                    location_context_changed = True
             for photo in photos:
                 if (
-                    photo.location is None
-                    and haversine_meters(photo, representative)
+                    haversine_meters(photo, representative)
                     <= settings.location_cluster_radius_meters
                 ):
-                    photo.location = location
+                    if photo.location != location:
+                        photo.location = location
+                        location_context_changed = True
+                    if cluster_context_changed and photo.id in candidate_ids:
+                        photo.analysis = None
+                        location_context_changed = True
 
         resolved_count = sum(photo.location is not None for photo in photos)
         _checkpoint_photos(job, manager, photos)
@@ -702,7 +809,7 @@ async def _resolve_photo_locations(
             resolved_location_count=resolved_count,
             message=(
                 f"地点解析 {index + 1}/{len(clusters)}，"
-                f"已为 {resolved_count} 张照片补充地址"
+                f"已为 {resolved_count} 张照片补充拍摄地与附近地标"
             ),
         )
 
@@ -713,7 +820,7 @@ async def _resolve_photo_locations(
     if errors:
         manager.update(
             job,
-            message=f"已解析 {resolved_count} 张照片的位置，{len(errors)} 个地点暂时查询失败",
+            message=f"已解析 {resolved_count} 张照片的位置，{len(errors)} 次地点查询暂时失败",
         )
 
 
@@ -769,7 +876,13 @@ def _build_manifest(job: Job, photos: list[MediaPhoto], source_paths: dict[str, 
                 "description": analysis.description if analysis else "旅行照片",
                 "category": analysis.category if analysis else "其他",
                 "display_location": photo.location.display_name if photo.location else "",
-                "caption": photo.caption,
+                "capture_location": photo.location.display_name if photo.location else "",
+                "nearby_landmark": (
+                    photo.location.nearby_landmark.name
+                    if photo.location and photo.location.nearby_landmark
+                    else ""
+                ),
+                "caption": photo.poem_line or photo.caption,
                 "chapter_id": photo.chapter_id,
                 "image": f"assets/photos/{photo.id}.jpg",
                 "source": source_paths[photo.id],

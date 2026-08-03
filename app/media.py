@@ -56,6 +56,7 @@ class MediaPhoto:
     analysis: Any = None
     generated_path: Path | None = None
     caption: str = ""
+    poem_line: str = ""
     chapter_id: str = ""
 
 

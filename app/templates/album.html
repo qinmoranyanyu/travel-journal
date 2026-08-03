@@ -38,11 +38,16 @@
         <figure class="memory memory--{{ loop.index0 % 3 }}">
           <img src="{{ photo.image }}" alt="{{ photo.description }}" loading="lazy" width="1024" height="1365">
           <figcaption>
-            <span class="memory__meta">
-              <span class="memory__date">{{ photo.display_date }}</span>
-              {% if photo.display_location %}<span class="memory__location">{{ photo.display_location }}</span>{% endif %}
-            </span>
-            <span class="memory__caption">{{ photo.caption }}</span>
+            <span class="memory__date">{{ photo.display_date }}</span>
+            <div class="memory__body">
+              <span class="memory__caption">{{ photo.caption }}</span>
+              {% if photo.capture_location or photo.nearby_landmark %}
+              <dl class="memory__locations">
+                {% if photo.capture_location %}<div><dt class="location-label location-label--at">AT</dt><dd>{{ photo.capture_location }}</dd></div>{% endif %}
+                {% if photo.nearby_landmark %}<div><dt class="location-label location-label--near">NEAR</dt><dd>{{ photo.nearby_landmark }}</dd></div>{% endif %}
+              </dl>
+              {% endif %}
+            </div>
           </figcaption>
         </figure>
         {% endfor %}

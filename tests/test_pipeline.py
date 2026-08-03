@@ -1,4 +1,7 @@
 import asyncio
+import json
+import logging
+import threading
 from pathlib import Path
 
 import httpx
@@ -12,6 +15,7 @@ from app.models import (
     ImageAnalysis,
     JobSnapshot,
     JobStatus,
+    NearbyLandmark,
     PhotoLocation,
     StoryChapter,
     StoryPlan,
@@ -56,6 +60,10 @@ class FlakyImageService:
                 )
             ],
             captions={photo.id: "at the coast" for photo in photos},
+            poem_lines={
+                photo.id: f"poem line {index + 1}"
+                for index, photo in enumerate(photos)
+            },
             closing="end",
         )
 
@@ -70,12 +78,39 @@ class FlakyImageService:
 
 class StableImageService(FlakyImageService):
     generated_photo_ids: list[str] = []
+    generated_captions: list[str] = []
 
     def generate_revival(self, photo, caption, output_path: Path):
         type(self).generated_photo_ids.append(photo.id)
+        type(self).generated_captions.append(caption)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (30, 40), "white").save(output_path)
         return output_path
+
+
+class ConcurrentImageService(StableImageService):
+    active_calls = 0
+    max_active_calls = 0
+    lock = threading.Lock()
+    first_batch_barrier: threading.Barrier | None = None
+
+    def generate_revival(self, photo, caption, output_path: Path):
+        with type(self).lock:
+            type(self).active_calls += 1
+            type(self).max_active_calls = max(
+                type(self).max_active_calls,
+                type(self).active_calls,
+            )
+        try:
+            if type(self).first_batch_barrier and photo.id in {
+                "photo-00001",
+                "photo-00002",
+            }:
+                type(self).first_batch_barrier.wait(timeout=3)
+            return super().generate_revival(photo, caption, output_path)
+        finally:
+            with type(self).lock:
+                type(self).active_calls -= 1
 
 
 class AlwaysFailImageService(FlakyImageService):
@@ -110,6 +145,7 @@ class NoCallService:
 
 class RecordingGeocoder:
     calls: list[tuple[float, float]] = []
+    nearby_calls: list[tuple[float, float]] = []
 
     def __init__(self, api_key: str) -> None:
         assert api_key == "amap-test"
@@ -126,6 +162,32 @@ class RecordingGeocoder:
             location_key="浙江省|杭州市|西湖区|孤山",
             confidence="poi",
         )
+
+    def nearby(
+        self,
+        latitude: float,
+        longitude: float,
+        capture_location: PhotoLocation,
+    ) -> NearbyLandmark:
+        assert capture_location.poi_name == "孤山"
+        type(self).nearby_calls.append((latitude, longitude))
+        return NearbyLandmark(
+            name="西湖风景名胜区",
+            distance_meters=860,
+            category="重要景区",
+            typecode="110202",
+            rating=4.9,
+        )
+
+
+class FailingNearbyGeocoder(RecordingGeocoder):
+    def nearby(
+        self,
+        latitude: float,
+        longitude: float,
+        capture_location: PhotoLocation,
+    ) -> NearbyLandmark:
+        raise RuntimeError("nearby service unavailable")
 
 
 def test_location_resolution_clusters_requests_and_checkpoints(monkeypatch, tmp_path):
@@ -145,6 +207,7 @@ def test_location_resolution_clusters_requests_and_checkpoints(monkeypatch, tmp_
         photo.gps_inspected = True
 
     RecordingGeocoder.calls = []
+    RecordingGeocoder.nearby_calls = []
     monkeypatch.setattr(pipeline, "AmapReverseGeocoder", RecordingGeocoder)
 
     asyncio.run(
@@ -158,9 +221,52 @@ def test_location_resolution_clusters_requests_and_checkpoints(monkeypatch, tmp_
     )
 
     assert RecordingGeocoder.calls == [(30.2731, 120.1645)]
+    assert RecordingGeocoder.nearby_calls == [(30.2731, 120.1645)]
     assert {photo.location.display_name for photo in photos} == {"杭州 · 孤山"}
+    assert {
+        photo.location.nearby_landmark.name for photo in photos
+    } == {"西湖风景名胜区"}
+    assert all(photo.location.nearby_searched for photo in photos)
     assert job.snapshot.resolved_location_count == 2
     assert job.pipeline_state["photos"][0]["latitude"] == 30.2731
+    assert (
+        job.pipeline_state["photos"][0]["location"]["nearby_landmark"]["distance_meters"]
+        == 860
+    )
+
+
+def test_nearby_lookup_failure_is_logged_without_losing_capture_location(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
+    settings = Settings(amap_api_key="amap-test")
+    job = Job(
+        snapshot=JobSnapshot(id="location-error-job", gps_photo_count=1),
+        album_input=AlbumInput(title="location album", target_count=1),
+        workspace=tmp_path,
+    )
+    photo = pipeline.MediaPhoto("one", "one.jpg", tmp_path / "one.jpg", 0)
+    photo.latitude, photo.longitude = 30.2731, 120.1645
+    photo.gps_inspected = True
+    monkeypatch.setattr(pipeline, "AmapReverseGeocoder", FailingNearbyGeocoder)
+
+    with caplog.at_level(logging.WARNING, logger="app.pipeline"):
+        asyncio.run(
+            pipeline._resolve_photo_locations(
+                job,
+                RecordingManager(),
+                settings,
+                [photo],
+                [photo],
+            )
+        )
+
+    assert photo.location is not None
+    assert photo.location.display_name == "杭州 · 孤山"
+    assert any(key.endswith(":nearby") for key in job.pipeline_state["location_errors"])
+    assert "nearby_landmark_lookup_failed job_id=location-error-job cluster=1/1" in caplog.text
+    assert "error_type=RuntimeError error=nearby service unavailable" in caplog.text
 
 
 def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
@@ -219,14 +325,18 @@ def test_pipeline_retries_transport_failure_serially(monkeypatch, tmp_path):
     assert len(list((tmp_path / "outputs").glob("*/assets/photos/photo-00001.jpg"))) == 1
 
 
-def test_pipeline_generates_serially_with_configured_interval(monkeypatch, tmp_path):
+def test_pipeline_generates_concurrently_and_waits_between_batches(
+    monkeypatch,
+    tmp_path,
+    caplog,
+):
     workspace = tmp_path / ".jobs" / "job-two"
     uploads = workspace / "uploads"
     uploads.mkdir(parents=True)
     (workspace / "analysis").mkdir()
     (workspace / "generation").mkdir()
     upload_rows = []
-    for index, color in enumerate(("white", "black")):
+    for index, color in enumerate(("white", "black", "gray")):
         source = uploads / f"{index:05d}-photo-{index}.jpg"
         Image.new("RGB", (100, 80), color).save(source)
         upload_rows.append(
@@ -245,16 +355,21 @@ def test_pipeline_generates_serially_with_configured_interval(monkeypatch, tmp_p
         openai_api_key="test",
         openai_text_model="test",
         image_generation_interval_seconds=2.5,
+        image_generation_concurrency=2,
     )
     settings.ensure_directories()
     job = Job(
         snapshot=JobSnapshot(id="job-two"),
-        album_input=AlbumInput(title="serial album", target_count=2),
+        album_input=AlbumInput(title="concurrent album", target_count=3),
         workspace=workspace,
         uploads=upload_rows,
     )
-    StableImageService.generated_photo_ids = []
-    monkeypatch.setattr(pipeline, "OpenAIService", StableImageService)
+    ConcurrentImageService.generated_photo_ids = []
+    ConcurrentImageService.generated_captions = []
+    ConcurrentImageService.active_calls = 0
+    ConcurrentImageService.max_active_calls = 0
+    ConcurrentImageService.first_batch_barrier = threading.Barrier(2)
+    monkeypatch.setattr(pipeline, "OpenAIService", ConcurrentImageService)
     monkeypatch.setattr(pipeline, "near_duplicate_representatives", lambda photos: photos)
 
     sleep_calls: list[float] = []
@@ -268,11 +383,41 @@ def test_pipeline_generates_serially_with_configured_interval(monkeypatch, tmp_p
     monkeypatch.setattr(pipeline.asyncio, "sleep", record_sleep)
     monkeypatch.setattr(pipeline, "export_share_images", skip_share_export)
 
-    asyncio.run(pipeline.run_pipeline(job, RecordingManager(), settings))
+    with caplog.at_level(logging.INFO, logger="app.pipeline"):
+        asyncio.run(pipeline.run_pipeline(job, RecordingManager(), settings))
 
-    assert StableImageService.generated_photo_ids == ["photo-00001", "photo-00002"]
+    assert set(ConcurrentImageService.generated_photo_ids) == {
+        "photo-00001",
+        "photo-00002",
+        "photo-00003",
+    }
+    assert ConcurrentImageService.generated_captions == [
+        "at the coast",
+        "at the coast",
+        "at the coast",
+    ]
+    assert ConcurrentImageService.max_active_calls == 2
     assert sleep_calls == [2.5]
+    assert "image_generation_batch_started job_id=job-two pass=initial" in caplog.text
+    assert "batch_size=2 concurrency=2" in caplog.text
+    assert "image_generation_batch_completed job_id=job-two pass=initial" in caplog.text
     assert job.snapshot.status == JobStatus.completed
+    manifest_path = next((tmp_path / "outputs").glob("*/album.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert [photo["caption"] for photo in manifest["photos"]] == [
+        "poem line 1",
+        "poem line 2",
+        "poem line 3",
+    ]
+    album_html = (manifest_path.parent / "index.html").read_text(encoding="utf-8")
+    share_html = (manifest_path.parent / "share.html").read_text(encoding="utf-8")
+    assert "poem line 1" in album_html
+    assert "poem line 3" in share_html
+    assert "at the coast" not in album_html
+    assert "at the coast" not in share_html
+    assert job.pipeline_state["story_content_version"] == 2
+    assert job.pipeline_state["photos"][0]["caption"] == "at the coast"
+    assert job.pipeline_state["photos"][0]["poem_line"] == "poem line 1"
 
 
 def test_pipeline_stops_retry_loop_and_uses_original_fallback(monkeypatch, tmp_path):

@@ -318,7 +318,7 @@ function App() {
         <section className="composer" aria-labelledby="new-album-title">
           <div className="section-heading">
             <div><span>{showingCurrentTask ? "CURRENT VOLUME" : "NEW VOLUME"}</span><h2 id="new-album-title">{showingCurrentTask ? "当前任务资料" : "新建旅行手记"}</h2></div>
-            <button className="quiet-button" type="button" onClick={startNewTask}><Plus size={16} />新建任务</button>
+            <button className="new-task-button" type="button" onClick={startNewTask}><Plus size={17} />新建任务</button>
           </div>
 
           <form onSubmit={handleSubmit}>

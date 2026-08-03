@@ -107,6 +107,15 @@ class ImageAnalysis(BaseModel):
     caption_seed: str = ""
 
 
+class NearbyLandmark(BaseModel):
+    name: str
+    distance_meters: float = Field(ge=0)
+    category: str
+    typecode: str = ""
+    rating: float | None = Field(default=None, ge=0)
+    provider: str = "amap"
+
+
 class PhotoLocation(BaseModel):
     province: str = ""
     city: str = ""
@@ -118,6 +127,8 @@ class PhotoLocation(BaseModel):
     location_key: str = ""
     provider: str = "amap"
     confidence: str = "address"
+    nearby_landmark: NearbyLandmark | None = None
+    nearby_searched: bool = False
 
 
 class StoryChapter(BaseModel):
@@ -131,11 +142,12 @@ class StoryPlan(BaseModel):
     cover_subtitle: str = ""
     chapters: list[StoryChapter]
     captions: dict[str, str] = Field(default_factory=dict)
+    poem_lines: dict[str, str] = Field(default_factory=dict)
     closing: str = ""
 
 
 class AlbumManifest(BaseModel):
-    schema_version: int = 2
+    schema_version: int = 3
     id: str
     title: str
     location: str = ""

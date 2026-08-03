@@ -120,18 +120,26 @@ def _chapter_photos(data: dict) -> list[dict]:
     chapters = []
     for chapter in data["chapters"]:
         chapter_rows = []
-        previous_location = ""
-        for index, photo_id in enumerate(chapter["photo_ids"]):
+        previous_location_pair: tuple[str, str] | None = None
+        for photo_id in chapter["photo_ids"]:
             if photo_id not in photos:
                 continue
             photo = dict(photos[photo_id])
-            display_location = photo.get("display_location", "")
-            photo["show_share_location"] = bool(
-                display_location
-                and (index == 0 or display_location != previous_location)
+            capture_location = photo.get("capture_location") or photo.get(
+                "display_location", ""
             )
-            if display_location:
-                previous_location = display_location
+            nearby_landmark = photo.get("nearby_landmark", "")
+            photo["capture_location"] = capture_location
+            photo["nearby_landmark"] = nearby_landmark
+            location_pair = (capture_location, nearby_landmark)
+            has_location = bool(capture_location or nearby_landmark)
+            photo["show_share_locations"] = bool(
+                has_location and location_pair != previous_location_pair
+            )
+            # Retain the old flag for manifests or custom templates using it.
+            photo["show_share_location"] = photo["show_share_locations"]
+            if has_location:
+                previous_location_pair = location_pair
             chapter_rows.append(photo)
         chapters.append(
             {

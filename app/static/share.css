@@ -4,7 +4,7 @@ body { margin: 0; padding: 40px 20px; }
 .share-sheet { width: 1080px; min-height: 1440px; margin: 0 auto 40px; padding: 88px; background: #fbfcf9; overflow: hidden; }
 .share-cover { height: 1440px; display: grid; grid-template-rows: auto 1fr auto; border-top: 14px solid #c8553d; }
 .share-cover__rule { width: 72px; height: 6px; background: #91b8c2; }
-.share-kicker, .share-cover footer, .share-chapter header > p, figcaption span { font: 16px/1.4 "Segoe UI", sans-serif; color: #49675a; }
+.share-kicker, .share-cover footer, .share-chapter header > p, .share-photo__date { font: 16px/1.4 "Segoe UI", sans-serif; color: #49675a; }
 .share-cover__center { align-self: center; }
 .share-cover__center > p { color: #c8553d; font-size: 20px; }
 .share-cover h1 { max-width: 850px; margin: 22px 0 34px; font: 700 82px/1.08 "STKaiti", "KaiTi", serif; overflow-wrap: anywhere; }
@@ -19,7 +19,13 @@ body { margin: 0; padding: 40px 20px; }
 .share-grid figure { margin: 0; }
 .share-grid img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; box-shadow: 0 12px 34px rgb(31 38 34 / 8%); }
 .share-grid figcaption { margin-top: 14px; display: grid; grid-template-columns: 86px 1fr; gap: 12px; font-size: 16px; line-height: 1.6; }
-.share-photo__meta { display: grid; align-content: start; gap: 6px; }
-.share-photo__meta em { color: #c8553d; font-style: normal; line-height: 1.45; }
+.share-photo__body { min-width: 0; display: grid; gap: 10px; }
 .share-photo__caption { color: #1f2622; font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif; }
+.share-photo__locations { margin: 0; display: grid; gap: 4px; }
+.share-photo__locations > div { display: grid; grid-template-columns: 48px minmax(0, 1fr); gap: 8px; align-items: baseline; }
+.share-photo__locations dt, .share-photo__locations dd { margin: 0; }
+.share-photo__locations dd { color: #1f2622; font: 15px/1.5 "Microsoft YaHei", "Noto Sans SC", sans-serif; overflow-wrap: anywhere; }
+.share-location-label { font: 700 13px/1.5 "Segoe UI", sans-serif; }
+.share-location-label--at { color: #c8553d; }
+.share-location-label--near { color: #49675a; }
 .share-closing { margin: 80px 0 10px 148px; padding-top: 40px; border-top: 1px solid #d8ddd8; font: 25px/1.8 "STKaiti", "KaiTi", serif; }

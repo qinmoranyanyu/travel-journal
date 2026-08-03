@@ -38,7 +38,9 @@ class OpenAIService:
                 "text": (
                     "分析以下旅行照片。为每张照片返回客观、简洁的数据，不猜测人物姓名、对话、"
                     "具体事件或未提供的地点。capture_location 来自照片 EXIF GPS 的地址解析，"
-                    "属于可信元数据，可用于描述地点氛围，但不要补充元数据中没有的地名。"
+                    "属于可信元数据，可用于描述拍摄地点。nearby_landmark 仅表示拍摄点约 3 公里"
+                    "范围内的地标，可用“附近”“靠近”等措辞丰富语境，但严禁写成照片拍摄于、"
+                    "到访了或能看见该地标；不要补充元数据中没有的地名。"
                     "category 使用人物、风景、建筑、食物、交通、细节、活动、其他之一。"
                     "story_value 和 technical_quality 是 0 到 1 的小数。输出 JSON："
                     '{"photos":[{"photo_id":"...","description":"...","category":"...",'
@@ -54,8 +56,19 @@ class OpenAIService:
             if photo.location:
                 metadata["capture_location"] = photo.location.model_dump(
                     mode="json",
-                    exclude={"provider", "confidence", "location_key"},
+                    exclude={
+                        "provider",
+                        "confidence",
+                        "location_key",
+                        "nearby_landmark",
+                        "nearby_searched",
+                    },
                 )
+                if photo.location.nearby_landmark:
+                    metadata["nearby_landmark"] = photo.location.nearby_landmark.model_dump(
+                        mode="json",
+                        exclude={"provider"},
+                    )
             content.append(
                 {"type": "text", "text": json.dumps(metadata, ensure_ascii=False)}
             )
@@ -109,9 +122,23 @@ class OpenAIService:
                     "capture_location": (
                         photo.location.model_dump(
                             mode="json",
-                            exclude={"provider", "confidence", "location_key"},
+                            exclude={
+                                "provider",
+                                "confidence",
+                                "location_key",
+                                "nearby_landmark",
+                                "nearby_searched",
+                            },
                         )
                         if photo.location
+                        else None
+                    ),
+                    "nearby_landmark": (
+                        photo.location.nearby_landmark.model_dump(
+                            mode="json",
+                            exclude={"provider"},
+                        )
+                        if photo.location and photo.location.nearby_landmark
                         else None
                     ),
                     "description": analysis.description if analysis else "",
@@ -127,12 +154,16 @@ class OpenAIService:
                 "trip 中用户填写的旅行名称、地点、同行关系和回忆是可信事实，必须优先用于标题与文案，不得称其为线索缺失。",
                 "按照片当前时间顺序分成自然章节，不遗漏或重复 photo_id。",
                 "章节数量随内容决定，通常 1-6 个。",
-                "章节引言 40-80 字，每张旁白 10-30 字，结尾 80-150 字。",
+                "章节引言 40-80 字，结尾 80-150 字。",
                 "联系相邻照片形成叙事，但不编造姓名、对话、具体事件或无依据地点。",
                 "capture_location 来自照片 GPS，可用于章节划分、标题和旁白；trip.location 是用户确认的旅行级事实，二者冲突时优先采用 trip.location，并避免断言矛盾地点。",
+                "nearby_landmark 只是拍摄点约 3 公里内的地理参照。可写“附近”或“靠近”，但不得声称照片拍摄于、人物到访了或从照片中能看见该地标；没有叙事价值时可以不写。",
                 "地点措辞应自然克制，优先使用城市、区域或景点名称，不在旁白中堆砌完整门牌地址。",
                 "避免时光定格、岁月静好、奔赴山海等套话。",
                 "时间可信度为 estimated 时，不写清晨、傍晚、第二天等具体推断。",
+                "captions 是写进生成图片内部的独立短旁白，每张 10-30 字，继续根据单张画面提炼，不要求彼此连成诗。",
+                "poem_lines 是 HTML 页面和分享长图中每张照片下方的诗行；必须覆盖每个 photo_id，且不得直接复制同一张的 captions。",
+                "严格按照 photos 的当前顺序创作 poem_lines，所有诗行依次连起来必须是一首完整、连贯、符合整组照片意境的中文诗。现代诗、古体诗或其他诗体均可，但整首风格与语气必须统一。",
             ],
             "trip": context,
             "photos": photo_rows,
@@ -146,7 +177,8 @@ class OpenAIService:
                         "photo_ids": ["photo_id"],
                     }
                 ],
-                "captions": {"photo_id": "旁白"},
+                "captions": {"photo_id": "图片内部的独立短旁白"},
+                "poem_lines": {"photo_id": "按照片顺序组成完整诗的对应诗行"},
                 "closing": "旅程回望",
             },
         }
@@ -239,9 +271,16 @@ class OpenAIService:
         return output_path
 
     def _chat_json(self, content: list[dict[str, Any]]) -> dict[str, Any]:
+        request_content = [
+            {
+                "type": "text",
+                "text": "Return a JSON object. 请返回 JSON 对象。",
+            },
+            *content,
+        ]
         kwargs = {
             "model": self.settings.openai_text_model,
-            "messages": [{"role": "user", "content": content}],
+            "messages": [{"role": "user", "content": request_content}],
         }
         try:
             response = self.client.chat.completions.create(
@@ -295,6 +334,7 @@ def _fallback_story(photos: list[MediaPhoto], context: dict[str, Any]) -> StoryP
             )
         ],
         captions=captions,
+        poem_lines=_fallback_poem_lines(photos),
         closing="旅程已经结束，照片仍保留着沿途的光线、距离和当时没有说完的话。",
     )
 
@@ -327,9 +367,59 @@ def _repair_story(
         else:
             return _fallback_story(photos, context)
     plan.chapters = repaired
+    order = {photo_id: index for index, photo_id in enumerate(valid_ids)}
+    for chapter in plan.chapters:
+        chapter.photo_ids.sort(key=order.__getitem__)
+    plan.chapters.sort(key=lambda chapter: min(order[photo_id] for photo_id in chapter.photo_ids))
+    displayed_ids = [photo_id for chapter in plan.chapters for photo_id in chapter.photo_ids]
+    if displayed_ids != valid_ids:
+        first_chapter = plan.chapters[0]
+        logger.warning(
+            "story_photo_order_repaired selected_count=%d fallback=single_chapter",
+            len(photos),
+        )
+        plan.chapters = [
+            StoryChapter(
+                id="chapter-1",
+                title=first_chapter.title,
+                intro=first_chapter.intro,
+                photo_ids=valid_ids,
+            )
+        ]
+    for index, chapter in enumerate(plan.chapters):
+        chapter.id = f"chapter-{index + 1}"
+
+    fallback_poem = _fallback_poem_lines(photos)
     for photo in photos:
         plan.captions.setdefault(
             photo.id,
             photo.analysis.caption_seed if photo.analysis else "这一刻被轻轻留下",
         )
+        poem_line = plan.poem_lines.get(photo.id, "").strip()
+        if not poem_line or poem_line == plan.captions[photo.id].strip():
+            plan.poem_lines[photo.id] = fallback_poem[photo.id]
     return plan
+
+
+def _fallback_poem_lines(photos: list[MediaPhoto]) -> dict[str, str]:
+    if not photos:
+        return {}
+    if len(photos) == 1:
+        return {photos[0].id: "这一程的风景，在回望里落成一首安静的诗。"}
+
+    lines: dict[str, str] = {}
+    middle_lines = (
+        "光沿着山水，把道路写向更远处，",
+        "偶然相逢的颜色，被风轻轻收拢，",
+        "脚步穿过人间，也穿过安静的云，",
+        "未说完的话，留在一程又一程风景里，",
+    )
+    for index, photo in enumerate(photos):
+        if index == 0:
+            line = "风从旅途的第一页起身，"
+        elif index == len(photos) - 1:
+            line = "直到所有远方，都在这一页成为温柔的回声。"
+        else:
+            line = middle_lines[(index - 1) % len(middle_lines)]
+        lines[photo.id] = line
+    return lines
