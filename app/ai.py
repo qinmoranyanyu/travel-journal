@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 import re
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -185,25 +185,57 @@ class OpenAIService:
             f"Tiny handwritten Chinese caption: {caption}\n"
             f"Tiny English field note/date: FIELD NOTE / {date_note}\n"
         )
+        logger.info(
+            "image_generation_stream_start photo_id=%s model=%s",
+            photo.id,
+            self.settings.openai_image_model,
+        )
         with photo.generation_path.open("rb") as image_file:
-            result = self.client.images.edit(
+            stream = self.client.images.edit(
                 model=self.settings.openai_image_model,
                 image=image_file,
                 prompt=prompt,
                 size="1024x1536",
+                stream=True,
             )
-        if not result.data:
-            raise RuntimeError("图片接口没有返回数据")
-        item = result.data[0]
-        if getattr(item, "b64_json", None):
-            image_bytes = base64.b64decode(item.b64_json)
-        elif getattr(item, "url", None):
-            with urllib.request.urlopen(item.url, timeout=180) as response:
-                image_bytes = response.read()
-        else:
-            raise RuntimeError("图片接口未返回 b64_json 或 url")
+
+            image_bytes: bytes | None = None
+            with stream as events:
+                for event in events:
+                    event_type = getattr(event, "type", "")
+                    if event_type == "image_edit.partial_image":
+                        logger.debug(
+                            "image_generation_stream_partial photo_id=%s index=%s",
+                            photo.id,
+                            getattr(event, "partial_image_index", "unknown"),
+                        )
+                        continue
+                    if event_type != "image_edit.completed":
+                        continue
+
+                    encoded = getattr(event, "b64_json", "")
+                    if not encoded:
+                        raise RuntimeError("图片编辑完成事件未包含 b64_json")
+                    try:
+                        image_bytes = base64.b64decode(encoded, validate=True)
+                    except (binascii.Error, ValueError) as exc:
+                        raise RuntimeError("图片编辑完成事件包含无效的 base64 数据") from exc
+
+        if image_bytes is None:
+            logger.error(
+                "image_generation_stream_incomplete photo_id=%s model=%s",
+                photo.id,
+                self.settings.openai_image_model,
+            )
+            raise RuntimeError("图片编辑流已结束，但未收到 image_edit.completed 事件")
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(image_bytes)
+        logger.info(
+            "image_generation_stream_completed photo_id=%s bytes=%d",
+            photo.id,
+            len(image_bytes),
+        )
         return output_path
 
     def _chat_json(self, content: list[dict[str, Any]]) -> dict[str, Any]:
