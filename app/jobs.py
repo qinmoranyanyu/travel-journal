@@ -141,7 +141,7 @@ class JobManager:
             job,
             retry_stop_requested=True,
             can_stop_retries=False,
-            message="已请求终止重试，当前请求结束后将继续排版",
+            message="已请求终止重试，当前批次结束后将继续排版",
         )
 
     def update(self, job: Job, **changes: Any) -> None:

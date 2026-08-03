@@ -24,6 +24,7 @@ class Settings(BaseModel):
     openai_image_model: str = "gpt-image-1"
     amap_api_key: str = ""
     image_generation_interval_seconds: float = 10.0
+    image_generation_concurrency: int = 3
     vision_batch_size: int = 4
     location_cluster_radius_meters: float = 200.0
     log_level: str = "INFO"
@@ -73,6 +74,9 @@ def get_settings() -> Settings:
         amap_api_key=os.getenv("AMAP_API_KEY", ""),
         image_generation_interval_seconds=max(
             0.0, float(os.getenv("IMAGE_GENERATION_INTERVAL_SECONDS", "10"))
+        ),
+        image_generation_concurrency=max(
+            1, int(os.getenv("IMAGE_GENERATION_CONCURRENCY", "3"))
         ),
         vision_batch_size=max(1, int(os.getenv("VISION_BATCH_SIZE", "4"))),
         location_cluster_radius_meters=max(
