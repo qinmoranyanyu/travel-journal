@@ -54,6 +54,12 @@ exports/                朋友圈章节长图
 
 同一时间只执行一个相册任务，入选照片也会逐张串行生成。`IMAGE_GENERATION_INTERVAL_SECONDS` 控制相邻两次图片请求之间的等待秒数。刷新或关闭浏览器不会停止任务；停止 FastAPI 后，未完成任务会标记为中断，不会自动续跑。
 
+## 日志
+
+控制台日志会同时写入 `logs/travel-journal.log`。单个文件达到 5 MB 后自动轮转，默认保留 5 份历史日志；错误记录包含任务 ID、处理阶段和 Python 异常堆栈，但会脱敏 OpenAI、高德 API Key，并且不会记录照片的原始经纬度。
+
+可在 `.env` 中用 `LOG_LEVEL=DEBUG|INFO|WARNING|ERROR` 调整日志级别，默认是 `INFO`。排查失败任务时，优先搜索 `pipeline_failed`、`location_lookup_failed`、`image_generation_failed`、`share_image_export_failed` 或 `request_failed`。
+
 ## 测试
 
 ```shell

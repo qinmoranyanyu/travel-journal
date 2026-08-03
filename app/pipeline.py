@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -29,12 +30,21 @@ from .rendering import (
 from .selection import select_story_set
 
 
+logger = logging.getLogger(__name__)
+
+
 class PipelinePaused(Exception):
     pass
 
 
 async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> None:
     output_dir: Path | None = None
+    logger.info(
+        "pipeline_started job_id=%s photo_count=%d target_count=%d",
+        job.snapshot.id,
+        len(job.uploads),
+        job.album_input.target_count,
+    )
     try:
         if not settings.api_configured:
             raise RuntimeError("OpenAI 配置不完整，请在 .env 中设置密钥和模型名称")
@@ -227,6 +237,12 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     await generate_photo(photo)
                     generation_errors.pop(photo.id, None)
                 except Exception as exc:
+                    logger.warning(
+                        "image_generation_failed job_id=%s photo_id=%s pass=initial",
+                        job.snapshot.id,
+                        photo.id,
+                        exc_info=True,
+                    )
                     generation_errors[photo.id] = str(exc)
                 _checkpoint_photos(job, manager, photos)
                 _checkpoint(job, manager, generation_errors=generation_errors)
@@ -275,6 +291,13 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                     await generate_photo(photo)
                     generation_errors.pop(photo.id, None)
                 except Exception as exc:
+                    logger.warning(
+                        "image_generation_failed job_id=%s photo_id=%s pass=retry retry_round=%d",
+                        job.snapshot.id,
+                        photo.id,
+                        retry_round,
+                        exc_info=True,
+                    )
                     generation_errors[photo.id] = str(exc)
                 _checkpoint_photos(job, manager, photos)
                 _checkpoint(
@@ -369,6 +392,11 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             try:
                 exports = await export_share_images(output_dir)
             except Exception as exc:
+                logger.exception(
+                    "share_image_export_failed job_id=%s output_dir=%s",
+                    job.snapshot.id,
+                    output_dir,
+                )
                 exports = []
                 export_error = str(exc)
             _checkpoint(job, manager, exports=exports)
@@ -400,7 +428,20 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             can_stop_retries=False,
             failed_items=len(failures),
         )
+        logger.info(
+            "pipeline_finished job_id=%s status=%s selected_count=%d fallback_count=%d export_count=%d",
+            job.snapshot.id,
+            status,
+            len(completed_photos),
+            len(failures),
+            len(exports),
+        )
     except PipelinePaused:
+        logger.info(
+            "pipeline_paused job_id=%s stage=%s",
+            job.snapshot.id,
+            job.snapshot.stage,
+        )
         manager.update(
             job,
             status=JobStatus.paused,
@@ -409,6 +450,11 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             can_stop_retries=False,
         )
     except Exception as exc:
+        logger.exception(
+            "pipeline_failed job_id=%s stage=%s",
+            job.snapshot.id,
+            job.snapshot.stage,
+        )
         manager.update(
             job,
             status=JobStatus.failed,
@@ -622,6 +668,13 @@ async def _resolve_photo_locations(
                 )
                 errors.pop(error_key, None)
             except Exception as exc:
+                logger.warning(
+                    "location_lookup_failed job_id=%s cluster=%d/%d",
+                    job.snapshot.id,
+                    index + 1,
+                    len(clusters),
+                    exc_info=True,
+                )
                 errors[error_key] = str(exc)
 
         if location is not None:

@@ -14,6 +14,7 @@ class Settings(BaseModel):
     root_dir: Path = ROOT_DIR
     output_dir: Path = ROOT_DIR / "outputs"
     job_dir: Path = ROOT_DIR / ".jobs"
+    log_dir: Path = ROOT_DIR / "logs"
     frontend_dist: Path = ROOT_DIR / "frontend" / "dist"
     photo_revival_skill: Path = ROOT_DIR / "third_party" / "photo-revival" / "SKILL.md"
 
@@ -25,6 +26,7 @@ class Settings(BaseModel):
     image_generation_interval_seconds: float = 10.0
     vision_batch_size: int = 4
     location_cluster_radius_meters: float = 200.0
+    log_level: str = "INFO"
 
     @property
     def api_configured(self) -> bool:
@@ -44,6 +46,7 @@ class Settings(BaseModel):
     def ensure_directories(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.job_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _load_dotenv(path: Path) -> None:
@@ -75,6 +78,7 @@ def get_settings() -> Settings:
         location_cluster_radius_meters=max(
             10.0, float(os.getenv("LOCATION_CLUSTER_RADIUS_METERS", "200"))
         ),
+        log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
     )
     settings.ensure_directories()
     return settings

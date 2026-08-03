@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import time
 import urllib.error
@@ -10,6 +11,9 @@ from typing import Any
 
 from .media import MediaPhoto
 from .models import PhotoLocation
+
+
+logger = logging.getLogger(__name__)
 
 
 AMAP_REVERSE_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/regeo"
@@ -49,6 +53,11 @@ class AmapReverseGeocoder:
             except (OSError, ValueError, json.JSONDecodeError, urllib.error.URLError) as exc:
                 last_error = exc
                 if attempt == 0:
+                    logger.warning(
+                        "amap_reverse_geocode_retry error_type=%s",
+                        type(exc).__name__,
+                        exc_info=True,
+                    )
                     time.sleep(0.25)
         raise GeocodingError("高德地址查询失败") from last_error
 

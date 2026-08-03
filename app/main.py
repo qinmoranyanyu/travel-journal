@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .jobs import JobManager
+from .logging_config import configure_logging
 from .media import is_supported, safe_filename
 from .models import AlbumInput, JobDetail, JobListItem, JobSnapshot, JobUpload, TERMINAL_STATUSES
 from .pipeline import run_pipeline
@@ -22,11 +24,19 @@ from .rendering import create_share_zip
 
 
 settings = get_settings()
+log_file = configure_logging(
+    settings.log_dir,
+    settings.log_level,
+    secrets=(settings.openai_api_key, settings.amap_api_key),
+)
+logger = logging.getLogger(__name__)
+logger.info("application_logging_configured log_file=%s level=%s", log_file, settings.log_level)
 manager = JobManager(settings)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    logger.info("application_started")
     try:
         yield
     finally:
@@ -35,6 +45,7 @@ async def lifespan(_: FastAPI):
             task.cancel()
         if running:
             await asyncio.gather(*running, return_exceptions=True)
+        logger.info("application_stopped cancelled_tasks=%d", len(running))
 
 
 app = FastAPI(title="Travel Journal", version="0.1.0", lifespan=lifespan)
@@ -45,6 +56,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_unhandled_request_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        logger.exception(
+            "request_failed method=%s path=%s",
+            request.method,
+            request.url.path,
+        )
+        raise
 
 
 @app.get("/api/health")
@@ -122,6 +146,8 @@ async def start_job(job_id: str) -> JobSnapshot:
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     job.task = asyncio.create_task(run_pipeline(job, manager, settings))
+    job.task.add_done_callback(lambda task: _log_job_task_result(job_id, task))
+    logger.info("job_started job_id=%s", job_id)
     return job.snapshot
 
 
@@ -134,6 +160,7 @@ async def pause_job(job_id: str) -> JobSnapshot:
         manager.request_pause(job)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("job_pause_requested job_id=%s stage=%s", job_id, job.snapshot.stage)
     return job.snapshot
 
 
@@ -146,6 +173,7 @@ async def stop_generation_retries(job_id: str) -> JobSnapshot:
         manager.request_stop_retries(job)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    logger.info("job_generation_retries_stopped job_id=%s", job_id)
     return job.snapshot
 
 
@@ -214,6 +242,7 @@ async def create_job(
             if isinstance(item, dict)
         }
     except json.JSONDecodeError:
+        logger.warning("upload_metadata_invalid_json photo_count=%d", len(supported))
         metadata_by_name = {}
 
     album_input = AlbumInput(
@@ -245,7 +274,14 @@ async def create_job(
                 }
             )
         manager.persist(job)
+        logger.info(
+            "job_created job_id=%s photo_count=%d target_count=%d",
+            job_id,
+            len(job.uploads),
+            target_count,
+        )
     except Exception as exc:
+        logger.exception("job_upload_failed job_id=%s photo_count=%d", job_id, len(supported))
         manager.update(job, status="failed", stage="upload", message="照片保存失败", error=str(exc))
         raise HTTPException(status_code=500, detail="照片保存失败") from exc
     finally:
@@ -260,6 +296,19 @@ def _browser_timestamp(value) -> datetime | None:
         return datetime.fromtimestamp(float(value) / 1000).replace(microsecond=0)
     except (TypeError, ValueError, OSError):
         return None
+
+
+def _log_job_task_result(job_id: str, task: asyncio.Task[None]) -> None:
+    if task.cancelled():
+        logger.info("job_task_cancelled job_id=%s", job_id)
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error(
+            "job_task_unhandled_error job_id=%s",
+            job_id,
+            exc_info=(type(error), error, error.__traceback__),
+        )
 
 
 def _job_detail(job) -> JobDetail:

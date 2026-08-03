@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,9 @@ from .models import (
     TERMINAL_STATUSES,
     utc_now,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -142,11 +146,21 @@ class JobManager:
 
     def update(self, job: Job, **changes: Any) -> None:
         snapshot = job.snapshot
+        previous_status = snapshot.status
+        previous_stage = snapshot.stage
         for key, value in changes.items():
             if hasattr(snapshot, key):
                 setattr(snapshot, key, value)
         snapshot.updated_at = utc_now()
         self._persist(job)
+        if snapshot.status != previous_status or snapshot.stage != previous_stage:
+            logger.info(
+                "job_state_changed job_id=%s status=%s stage=%s progress=%.1f",
+                snapshot.id,
+                snapshot.status,
+                snapshot.stage,
+                snapshot.progress,
+            )
 
     def persist(self, job: Job) -> None:
         self._persist(job)
@@ -178,6 +192,11 @@ class JobManager:
                     )
                 )
             except (OSError, ValueError, KeyError, TypeError):
+                logger.warning(
+                    "album_manifest_read_failed path=%s",
+                    manifest_path,
+                    exc_info=True,
+                )
                 continue
         return sorted(albums, key=lambda album: album.created_at, reverse=True)
 
@@ -188,6 +207,11 @@ class JobManager:
                 if str(data.get("id", manifest_path.parent.name)) == album_id:
                     return manifest_path.parent
             except (OSError, ValueError, TypeError):
+                logger.warning(
+                    "album_manifest_lookup_failed path=%s",
+                    manifest_path,
+                    exc_info=True,
+                )
                 continue
         return None
 
@@ -202,11 +226,19 @@ class JobManager:
         }
         state_path = job.workspace / "job.json"
         temporary_path = job.workspace / "job.json.tmp"
-        temporary_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temporary_path.replace(state_path)
+        try:
+            temporary_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            temporary_path.replace(state_path)
+        except (OSError, TypeError, ValueError):
+            logger.exception(
+                "job_state_persist_failed job_id=%s path=%s",
+                job.snapshot.id,
+                state_path,
+            )
+            raise
 
     def _restore_interrupted(self) -> None:
         candidates: list[Job] = []
@@ -233,7 +265,13 @@ class JobManager:
                 candidates.append(job)
                 self._persist(job)
             except (OSError, ValueError, KeyError, TypeError):
+                logger.error(
+                    "job_restore_failed path=%s",
+                    state_path,
+                    exc_info=True,
+                )
                 continue
         if candidates:
             latest = max(candidates, key=lambda item: item.snapshot.updated_at)
             self.current_job_id = latest.snapshot.id
+        logger.info("jobs_restored count=%d", len(candidates))

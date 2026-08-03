@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import re
 import urllib.request
 from pathlib import Path
@@ -12,6 +13,9 @@ from openai import BadRequestError, OpenAI
 from .config import Settings
 from .media import MediaPhoto
 from .models import ImageAnalysis, StoryChapter, StoryPlan
+
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIService:
@@ -70,6 +74,11 @@ class OpenAIService:
                 parsed = ImageAnalysis.model_validate(item)
                 by_id[parsed.photo_id] = parsed
             except (ValueError, TypeError):
+                logger.warning(
+                    "image_analysis_item_invalid photo_id=%s",
+                    item.get("photo_id") if isinstance(item, dict) else "unknown",
+                    exc_info=True,
+                )
                 continue
 
         results: list[ImageAnalysis] = []
@@ -145,6 +154,11 @@ class OpenAIService:
         try:
             plan = StoryPlan.model_validate(payload)
         except ValueError:
+            logger.warning(
+                "story_plan_invalid selected_count=%d fallback=local",
+                len(photos),
+                exc_info=True,
+            )
             plan = _fallback_story(photos, context)
         return _repair_story(plan, photos, context)
 
@@ -203,6 +217,11 @@ class OpenAIService:
                 response_format={"type": "json_object"},
             )
         except BadRequestError:
+            logger.warning(
+                "structured_output_unsupported model=%s retry=plain_json",
+                self.settings.openai_text_model,
+                exc_info=True,
+            )
             response = self.client.chat.completions.create(**kwargs)
         text = response.choices[0].message.content or "{}"
         return _parse_json_object(text)
