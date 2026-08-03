@@ -81,6 +81,10 @@ def _browser_executable() -> Path | None:
     configured = os.getenv("PLAYWRIGHT_BROWSER_PATH")
     candidates = [
         Path(configured) if configured else None,
+        Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        Path.home() / "Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        Path.home() / "Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
         Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
         Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
         Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),

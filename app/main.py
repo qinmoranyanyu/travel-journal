@@ -301,7 +301,7 @@ else:
     async def development_root():
         return JSONResponse(
             {
-                "message": "前端尚未构建，请运行 frontend 开发服务器或 install.bat",
+                "message": "前端尚未构建，请运行 frontend 开发服务器或对应系统的安装脚本",
                 "api": "/docs",
             }
         )

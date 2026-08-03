@@ -4,7 +4,12 @@
 
 ## 安装与启动
 
-1. 运行 `install.bat` 安装 Python、前端依赖和长图导出所需的 Chromium。
+1. 安装并启动：
+
+   - Windows：运行 `install.bat`，之后运行 `start.bat`。
+   - macOS：双击 `install.command`，之后双击 `start.command`。首次启动也可以直接双击 `start.command`，它会自动完成安装。
+
+   安装脚本会安装 Python 包、前端依赖和长图导出所需的 Chromium。运行前请确保系统已安装 Python 3.11+ 和 Node.js 18+。
 2. 编辑项目根目录的 `.env`：
 
 ```dotenv
@@ -15,9 +20,9 @@ OPENAI_IMAGE_MODEL=gpt-image-1
 IMAGE_GENERATION_INTERVAL_SECONDS=10
 ```
 
-3. 运行 `start.bat`，浏览器会打开 <http://127.0.0.1:8000>。
+3. 运行对应系统的 `start` 脚本，浏览器会打开 <http://127.0.0.1:8000>。
 
-开发时运行 `dev.bat`，React 使用 `5173` 端口，FastAPI 使用 `8000` 端口。
+开发时 Windows 运行 `dev.bat`，macOS 双击 `dev.command`。React 使用 `5173` 端口，FastAPI 使用 `8000` 端口。
 
 ## 输出
 
@@ -36,8 +41,13 @@ exports/                朋友圈章节长图
 
 ## 测试
 
-```powershell
+```shell
+# Windows
 .\.app-venv\Scripts\python.exe -m pytest
+
+# macOS
+./.app-venv/bin/python -m pytest
+
 npm run build --prefix frontend
 ```
 
