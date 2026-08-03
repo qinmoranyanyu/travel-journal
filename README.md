@@ -13,12 +13,22 @@
 2. 编辑项目根目录的 `.env`：
 
 ```dotenv
-OPENAI_BASE_URL=https://www.hellotranfer.top/
+OPENAI_BASE_URL=你的baseURL
 OPENAI_API_KEY=你的密钥
 OPENAI_TEXT_MODEL=支持图片理解的文本模型
 OPENAI_IMAGE_MODEL=gpt-image-1
 AMAP_API_KEY=高德Web服务Key
 IMAGE_GENERATION_INTERVAL_SECONDS=10
+```
+
+```text
+高德 Key 的申请方式如下：
+打开高德开放平台控制台并登录。
+完成开发者认证。
+进入“应用管理 → 我的应用”，创建一个应用，例如“旅行手记”。
+在应用下添加 Key。
+服务平台务必选择“Web 服务”，不是 Web 端 JS API。
+申请后把 Key 放进项目根目录 .env：
 ```
 
 照片含有 EXIF GPS 时，应用会使用高德逆地理编码补充城市、区域和附近景点，地点会参与选片、章节编排与旁白生成。前往[高德开放平台控制台](https://console.amap.com/dev/key/app)创建应用并添加 Key，服务平台选择“Web 服务”。配置后需要重启应用；`AMAP_API_KEY` 未配置或地址查询失败时会跳过地点增强，不影响相册生成。
