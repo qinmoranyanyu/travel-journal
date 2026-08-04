@@ -3,7 +3,12 @@ from datetime import datetime
 from PIL import Image
 from PIL.TiffImagePlugin import IFDRational
 
-from app.media import MediaPhoto, inspect_photo, near_duplicate_representatives
+from app.media import (
+    MediaPhoto,
+    inspect_photo,
+    near_duplicate_representatives,
+    normalize_generated_page,
+)
 
 
 def test_extracts_original_exif_time(tmp_path):
@@ -62,3 +67,14 @@ def test_near_duplicates_keep_higher_quality(tmp_path):
     representatives = near_duplicate_representatives([dark, bright], threshold=64)
 
     assert representatives == [bright]
+
+
+def test_normalize_generated_page_supports_style_specific_cover(tmp_path):
+    source = tmp_path / "source.jpg"
+    target = tmp_path / "target.jpg"
+    Image.new("RGB", (120, 180), "#c6533e").save(source)
+
+    normalize_generated_page(source, target, (90, 150), "cover", "#f1eadb")
+
+    with Image.open(target) as result:
+        assert result.size == (90, 150)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import logging
 import re
@@ -11,8 +12,13 @@ from typing import Any
 from openai import BadRequestError, OpenAI
 
 from .config import Settings
+from .image_styles import (
+    get_image_style_spec,
+    load_image_style_rules,
+    normalize_image_caption,
+)
 from .media import MediaPhoto
-from .models import ImageAnalysis, StoryChapter, StoryPlan
+from .models import ImageAnalysis, ImageStyle, StoryChapter, StoryPlan
 
 
 logger = logging.getLogger(__name__)
@@ -29,7 +35,9 @@ class OpenAIService:
             max_retries=2,
             timeout=180,
         )
-        self.photo_revival_rules = settings.photo_revival_skill.read_text(encoding="utf-8")
+        self.image_style_rules = {
+            style: load_image_style_rules(settings, style) for style in ImageStyle
+        }
 
     def analyze_photos(self, photos: list[MediaPhoto]) -> list[ImageAnalysis]:
         content: list[dict[str, Any]] = [
@@ -111,6 +119,10 @@ class OpenAIService:
         return results
 
     def create_story(self, photos: list[MediaPhoto], context: dict[str, Any]) -> StoryPlan:
+        image_style = ImageStyle(
+            context.get("image_style", ImageStyle.photo_revival)
+        )
+        style_spec = get_image_style_spec(image_style)
         photo_rows = []
         for photo in photos:
             analysis = photo.analysis
@@ -161,7 +173,7 @@ class OpenAIService:
                 "地点措辞应自然克制，优先使用城市、区域或景点名称，不在旁白中堆砌完整门牌地址。",
                 "避免时光定格、岁月静好、奔赴山海等套话。",
                 "时间可信度为 estimated 时，不写清晨、傍晚、第二天等具体推断。",
-                "captions 是写进生成图片内部的独立短旁白，每张 10-30 字，继续根据单张画面提炼，不要求彼此连成诗。",
+                style_spec.story_caption_requirement,
                 "poem_lines 是 HTML 页面和分享长图中每张照片下方的诗行；必须覆盖每个 photo_id，且不得直接复制同一张的 captions。",
                 "严格按照 photos 的当前顺序创作 poem_lines，所有诗行依次连起来必须是一首完整、连贯、符合整组照片意境的中文诗。现代诗、古体诗或其他诗体均可，但整首风格与语气必须统一。",
             ],
@@ -177,7 +189,7 @@ class OpenAIService:
                         "photo_ids": ["photo_id"],
                     }
                 ],
-                "captions": {"photo_id": "图片内部的独立短旁白"},
+                "captions": {"photo_id": style_spec.story_caption_example},
                 "poem_lines": {"photo_id": "按照片顺序组成完整诗的对应诗行"},
                 "closing": "旅程回望",
             },
@@ -192,34 +204,28 @@ class OpenAIService:
                 exc_info=True,
             )
             plan = _fallback_story(photos, context)
-        return _repair_story(plan, photos, context)
+        return _repair_story(plan, photos, context, image_style)
 
-    def generate_revival(
+    def generate_image(
         self,
         photo: MediaPhoto,
         caption: str,
         output_path: Path,
+        image_style: ImageStyle = ImageStyle.photo_revival,
     ) -> Path:
         if photo.generation_path is None:
             raise RuntimeError(f"缺少图片生成副本: {photo.original_name}")
-        analysis = photo.analysis
-        details = "、".join((analysis.memorable_details if analysis else [])[:3])
-        date_note = photo.capture_time.strftime("%Y.%m.%d") if photo.capture_time else "FIELD NOTE"
-        location_note = photo.location.display_name if photo.location else ""
-        prompt = (
-            "Follow the Photo Revival skill below exactly.\n\n"
-            f"{self.photo_revival_rules}\n\n"
-            "Photo-specific direction:\n"
-            f"Preserve the recognizable subject and spatial relationship: "
-            f"{analysis.description if analysis else photo.original_name}.\n"
-            f"Memorable details to preserve: {details or 'the main subject and atmosphere'}.\n"
-            f"Known capture location for visual context: {location_note or 'not available'}.\n"
-            f"Tiny handwritten Chinese caption: {caption}\n"
-            f"Tiny English field note/date: FIELD NOTE / {date_note}\n"
+        image_style = ImageStyle(image_style)
+        prompt = _build_image_prompt(
+            photo,
+            normalize_image_caption(image_style, caption),
+            image_style,
+            self.image_style_rules[image_style],
         )
         logger.info(
-            "image_generation_stream_start photo_id=%s model=%s",
+            "image_generation_stream_start photo_id=%s style=%s model=%s",
             photo.id,
+            image_style.value,
             self.settings.openai_image_model,
         )
         with photo.generation_path.open("rb") as image_file:
@@ -229,6 +235,7 @@ class OpenAIService:
                 prompt=prompt,
                 size="1024x1536",
                 stream=True,
+                timeout=self.settings.image_generation_timeout_seconds,
             )
 
             image_bytes: bytes | None = None
@@ -264,11 +271,25 @@ class OpenAIService:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(image_bytes)
         logger.info(
-            "image_generation_stream_completed photo_id=%s bytes=%d",
+            "image_generation_stream_completed photo_id=%s style=%s bytes=%d",
             photo.id,
+            image_style.value,
             len(image_bytes),
         )
         return output_path
+
+    def generate_revival(
+        self,
+        photo: MediaPhoto,
+        caption: str,
+        output_path: Path,
+    ) -> Path:
+        return self.generate_image(
+            photo,
+            caption,
+            output_path,
+            ImageStyle.photo_revival,
+        )
 
     def _chat_json(self, content: list[dict[str, Any]]) -> dict[str, Any]:
         request_content = [
@@ -303,6 +324,106 @@ def _data_url(path: Path) -> str:
     return f"data:image/jpeg;base64,{encoded}"
 
 
+def _build_image_prompt(
+    photo: MediaPhoto,
+    caption: str,
+    image_style: ImageStyle,
+    style_rules: str,
+) -> str:
+    analysis = photo.analysis
+    description = analysis.description if analysis else photo.original_name
+    details = "、".join((analysis.memorable_details if analysis else [])[:3])
+    location_note = photo.location.display_name if photo.location else "not available"
+    common = (
+        "Photo-specific direction:\n"
+        f"Source subject and spatial relationship: {description}.\n"
+        f"Memorable source details: {details or 'the main subject and atmosphere'}.\n"
+        f"Known capture location for semantic context only: {location_note}. "
+        "Do not render the location as text.\n"
+    )
+    if image_style == ImageStyle.photo_revival:
+        date_note = (
+            photo.capture_time.strftime("%Y.%m.%d")
+            if photo.capture_time
+            else "FIELD NOTE"
+        )
+        direction = (
+            f"{common}"
+            f"Tiny handwritten Chinese caption, verbatim: {caption}\n"
+            f"Tiny English field note/date: FIELD NOTE / {date_note}\n"
+        )
+    elif image_style == ImageStyle.scenes_gathered:
+        direction = (
+            "Create one vertical 3:5 paper poster. Keep the source scene recognizable and "
+            "preserve a truthful photographic anchor, without promising pixel-identical "
+            "reproduction. Build the larger illustration field, torn-paper handoff, and one "
+            "source-derived high-chroma structure around that anchor. Keep all important "
+            "content within the central 90% of the canvas for final 3:5 cropping.\n"
+            f"{common}"
+            f"The only micro-text is this exact English phrase: {caption}\n"
+            "Do not add dates, labels, coordinates, signatures, or any other text.\n"
+        )
+    else:
+        variation = _minimal_zine_variation(photo.id)
+        direction = (
+            "Create one vertical 3:5 minimal zine poster. Recompose the source radically, but "
+            "retain at least one clearly recognizable source-derived subject, silhouette, or "
+            "spatial cue. Use one small visual cluster and 70%-90% aged-paper negative space. "
+            "Keep all important content within the central 90% of the canvas for final 3:5 "
+            "cropping.\n"
+            f"{common}"
+            f"Variation recipe for this page: {variation}.\n"
+            f"The only readable text is this exact Chinese phrase: {caption}\n"
+            "Do not add dates, labels, coordinates, signatures, or any other text.\n"
+        )
+    return (
+        f"Follow the {get_image_style_spec(image_style).skill_name} visual rules below. "
+        "The rules were compiled from the pinned upstream skill to include only directions "
+        "that become visible pixels; do not return explanations or prompt text.\n\n"
+        f"{style_rules}\n\n{direction}"
+    )
+
+
+def _minimal_zine_variation(photo_id: str) -> str:
+    layouts = (
+        "lower-left floating cluster with open upper paper",
+        "small upper-right block with loose text drift",
+        "two adjacent fragments with a narrow gap",
+        "single isolated central specimen",
+        "irregular source-derived cutout off center",
+    )
+    anchors = (
+        "torn-paper clipping",
+        "flat source-derived silhouette",
+        "old printed illustration",
+        "small faded source fragment",
+        "abstract texture window preserving one source cue",
+    )
+    textures = (
+        "xerox softness",
+        "risograph grain",
+        "letterpress ink bleed",
+        "halftone degradation",
+        "scan noise and paper fibers",
+    )
+    colors = (
+        "fully saturated cobalt-blue ink",
+        "clean tomato-red printed shape",
+        "vivid pear-green cut paper",
+        "lemon-yellow dry-print field",
+        "saturated magenta-pink silhouette",
+    )
+    digest = hashlib.sha256(photo_id.encode("utf-8")).digest()
+    return ", ".join(
+        (
+            layouts[digest[0] % len(layouts)],
+            anchors[digest[1] % len(anchors)],
+            textures[digest[2] % len(textures)],
+            colors[digest[3] % len(colors)],
+        )
+    )
+
+
 def _parse_json_object(text: str) -> dict[str, Any]:
     cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
     try:
@@ -318,9 +439,15 @@ def _parse_json_object(text: str) -> dict[str, Any]:
 
 
 def _fallback_story(photos: list[MediaPhoto], context: dict[str, Any]) -> StoryPlan:
+    image_style = ImageStyle(
+        context.get("image_style", ImageStyle.photo_revival)
+    )
     ids = [photo.id for photo in photos]
     captions = {
-        photo.id: (photo.analysis.caption_seed if photo.analysis else "这一刻被轻轻留下")
+        photo.id: normalize_image_caption(
+            image_style,
+            photo.analysis.caption_seed if photo.analysis else "",
+        )
         for photo in photos
     }
     return StoryPlan(
@@ -343,6 +470,7 @@ def _repair_story(
     plan: StoryPlan,
     photos: list[MediaPhoto],
     context: dict[str, Any],
+    image_style: ImageStyle = ImageStyle.photo_revival,
 ) -> StoryPlan:
     valid_ids = [photo.id for photo in photos]
     remaining = set(valid_ids)
@@ -394,6 +522,10 @@ def _repair_story(
         plan.captions.setdefault(
             photo.id,
             photo.analysis.caption_seed if photo.analysis else "这一刻被轻轻留下",
+        )
+        plan.captions[photo.id] = normalize_image_caption(
+            image_style,
+            plan.captions[photo.id],
         )
         poem_line = plan.poem_lines.get(photo.id, "").strip()
         if not poem_line or poem_line == plan.captions[photo.id].strip():

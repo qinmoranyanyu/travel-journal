@@ -17,7 +17,7 @@ body { margin: 0; padding: 40px 20px; }
 .share-chapter header .share-chapter__heading > div { max-width: 680px; font-size: 20px; line-height: 1.8; color: #46504a; }
 .share-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 54px 38px; align-items: start; }
 .share-grid figure { margin: 0; }
-.share-grid img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; box-shadow: 0 12px 34px rgb(31 38 34 / 8%); }
+.share-grid img { display: block; width: 100%; aspect-ratio: var(--photo-aspect, 3 / 4); object-fit: cover; box-shadow: 0 12px 34px rgb(31 38 34 / 8%); }
 .share-grid figcaption { margin-top: 14px; display: grid; grid-template-columns: 86px 1fr; gap: 12px; font-size: 16px; line-height: 1.6; }
 .share-photo__body { min-width: 0; display: grid; gap: 10px; }
 .share-photo__caption { color: #1f2622; font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif; }

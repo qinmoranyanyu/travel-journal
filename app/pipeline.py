@@ -10,6 +10,7 @@ from typing import Any
 from .ai import OpenAIService
 from .config import Settings
 from .geocoding import AmapReverseGeocoder, cluster_photos_by_location, haversine_meters
+from .image_styles import get_image_style_spec
 from .jobs import Job, JobManager
 from .media import (
     MediaPhoto,
@@ -39,11 +40,13 @@ class PipelinePaused(Exception):
 
 async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> None:
     output_dir: Path | None = None
+    style_spec = get_image_style_spec(job.album_input.image_style)
     logger.info(
-        "pipeline_started job_id=%s photo_count=%d target_count=%d",
+        "pipeline_started job_id=%s photo_count=%d target_count=%d image_style=%s",
         job.snapshot.id,
         len(job.uploads),
         job.album_input.target_count,
+        job.album_input.image_style.value,
     )
     try:
         if not settings.api_configured:
@@ -154,7 +157,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
         if story_data:
             story = StoryPlan.model_validate(story_data)
         else:
-            context = job.album_input.model_dump()
+            context = job.album_input.model_dump(mode="json")
             story = await asyncio.to_thread(service.create_story, selected, context)
             _checkpoint(
                 job,
@@ -199,7 +202,7 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             completed_items=0,
             total_items=len(selected),
             message=(
-                f"正在并发生成 {len(selected)} 张手绘照片，"
+                f"正在并发生成 {len(selected)} 张{style_spec.generation_noun}，"
                 f"并发度 {settings.image_generation_concurrency}"
             ),
         )
@@ -231,12 +234,20 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
             final_path = photos_dir / f"{photo.id}.jpg"
             temporary_path = photos_dir / f"{photo.id}.tmp.jpg"
             await asyncio.to_thread(
-                service.generate_revival,
+                service.generate_image,
                 photo,
                 photo.caption,
                 raw_path,
+                job.album_input.image_style,
             )
-            await asyncio.to_thread(normalize_generated_page, raw_path, temporary_path)
+            await asyncio.to_thread(
+                normalize_generated_page,
+                raw_path,
+                temporary_path,
+                (style_spec.output_width, style_spec.output_height),
+                style_spec.generated_fit,
+                style_spec.canvas_color,
+            )
             temporary_path.replace(final_path)
             photo.generated_path = final_path
 
@@ -404,7 +415,14 @@ async def run_pipeline(job: Job, manager: JobManager, settings: Settings) -> Non
                 final_path = photos_dir / f"{photo.id}.jpg"
                 temporary_path = photos_dir / f"{photo.id}.tmp.jpg"
                 fallback_source = photo.generation_path or photo.source_path
-                await asyncio.to_thread(normalize_generated_page, fallback_source, temporary_path)
+                await asyncio.to_thread(
+                    normalize_generated_page,
+                    fallback_source,
+                    temporary_path,
+                    (style_spec.output_width, style_spec.output_height),
+                    "contain",
+                    style_spec.canvas_color,
+                )
                 temporary_path.replace(final_path)
                 photo.generated_path = final_path
                 skipped_ids.add(photo.id)
@@ -913,6 +931,9 @@ def _build_manifest(job: Job, photos: list[MediaPhoto], source_paths: dict[str, 
         closing=story.closing,
         route_locations=route_locations,
         route_summary=route_summary,
+        image_style=job.album_input.image_style,
+        image_width=get_image_style_spec(job.album_input.image_style).output_width,
+        image_height=get_image_style_spec(job.album_input.image_style).output_height,
         chapters=chapters,
         photos=photo_rows,
     )

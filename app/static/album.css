@@ -72,7 +72,7 @@ main { border-top: 1px solid var(--line); }
 .memory { width: min(610px, 100%); margin: 0; }
 .memory--1 { justify-self: end; }
 .memory--2 { justify-self: center; width: min(520px, 100%); }
-.memory img { width: 100%; height: auto; aspect-ratio: 3 / 4; object-fit: cover; display: block; box-shadow: 0 16px 50px rgb(31 38 34 / 8%); }
+.memory img { width: 100%; height: auto; aspect-ratio: var(--photo-aspect, 3 / 4); object-fit: cover; display: block; box-shadow: 0 16px 50px rgb(31 38 34 / 8%); }
 .memory figcaption { margin-top: 18px; display: grid; grid-template-columns: 110px 1fr; gap: 22px; align-items: start; }
 .memory__body { min-width: 0; display: grid; gap: 10px; }
 .memory__caption { line-height: 1.75; }

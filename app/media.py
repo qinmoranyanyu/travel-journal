@@ -244,13 +244,29 @@ def copy_selected_source(photo: MediaPhoto, target_dir: Path) -> Path:
     return target
 
 
-def normalize_generated_page(source: Path, target: Path) -> None:
+def normalize_generated_page(
+    source: Path,
+    target: Path,
+    target_size: tuple[int, int] = (1024, 1365),
+    fit: str = "contain",
+    canvas_color: str = "white",
+) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source) as raw:
         image = raw.convert("RGB")
-        canvas = Image.new("RGB", (1024, 1365), "white")
-        image.thumbnail(canvas.size, Image.Resampling.LANCZOS)
-        x = (canvas.width - image.width) // 2
-        y = (canvas.height - image.height) // 2
-        canvas.paste(image, (x, y))
-        canvas.save(target, "JPEG", quality=94, optimize=True)
+        if fit == "cover":
+            normalized = ImageOps.fit(
+                image,
+                target_size,
+                method=Image.Resampling.LANCZOS,
+                centering=(0.5, 0.5),
+            )
+        elif fit == "contain":
+            normalized = Image.new("RGB", target_size, canvas_color)
+            image.thumbnail(target_size, Image.Resampling.LANCZOS)
+            x = (normalized.width - image.width) // 2
+            y = (normalized.height - image.height) // 2
+            normalized.paste(image, (x, y))
+        else:
+            raise ValueError(f"不支持的图片适配模式: {fit}")
+        normalized.save(target, "JPEG", quality=94, optimize=True)

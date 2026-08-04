@@ -189,6 +189,7 @@ class JobManager:
                         share_url=f"/albums/{folder}/share.html",
                         zip_url=f"/api/albums/{album_id}/zip",
                         export_urls=exports,
+                        image_style=data.get("image_style", "photo-revival-v1"),
                     )
                 )
             except (OSError, ValueError, KeyError, TypeError):

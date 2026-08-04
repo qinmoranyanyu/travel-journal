@@ -5,7 +5,7 @@
   <title>{{ album.title }} - 分享长图</title>
   <link rel="stylesheet" href="assets/styles/share.css">
 </head>
-<body>
+<body style="--photo-aspect: {{ album.image_width }} / {{ album.image_height }}">
   <section class="share-sheet share-cover">
     <div class="share-cover__rule"></div>
     <p class="share-kicker">TRAVEL FIELD NOTES</p>

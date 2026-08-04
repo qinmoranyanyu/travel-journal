@@ -15,6 +15,7 @@ def test_image_generation_defaults_to_controlled_concurrency():
     settings = Settings()
     assert settings.image_generation_interval_seconds == 10
     assert settings.image_generation_concurrency == 3
+    assert settings.image_generation_timeout_seconds == 360
 
 
 def test_image_generation_concurrency_loads_from_environment(monkeypatch):

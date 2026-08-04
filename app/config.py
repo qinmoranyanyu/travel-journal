@@ -17,6 +17,12 @@ class Settings(BaseModel):
     log_dir: Path = ROOT_DIR / "logs"
     frontend_dist: Path = ROOT_DIR / "frontend" / "dist"
     photo_revival_skill: Path = ROOT_DIR / "third_party" / "photo-revival" / "SKILL.md"
+    scenes_gathered_skill: Path = (
+        ROOT_DIR / "third_party" / "scenes-gathered-zine-v1-3" / "SKILL.md"
+    )
+    minimal_zine_skill: Path = (
+        ROOT_DIR / "third_party" / "gc-minimal-zine-poster-v0-1" / "SKILL.md"
+    )
 
     openai_base_url: str = "https://www.hellotranfer.top/"
     openai_api_key: str = ""
@@ -25,6 +31,7 @@ class Settings(BaseModel):
     amap_api_key: str = ""
     image_generation_interval_seconds: float = 10.0
     image_generation_concurrency: int = 3
+    image_generation_timeout_seconds: float = 360.0
     vision_batch_size: int = 4
     location_cluster_radius_meters: float = 200.0
     log_level: str = "INFO"
@@ -77,6 +84,9 @@ def get_settings() -> Settings:
         ),
         image_generation_concurrency=max(
             1, int(os.getenv("IMAGE_GENERATION_CONCURRENCY", "3"))
+        ),
+        image_generation_timeout_seconds=max(
+            30.0, float(os.getenv("IMAGE_GENERATION_TIMEOUT_SECONDS", "360"))
         ),
         vision_batch_size=max(1, int(os.getenv("VISION_BATCH_SIZE", "4"))),
         location_cluster_radius_meters=max(

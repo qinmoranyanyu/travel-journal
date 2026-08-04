@@ -18,7 +18,15 @@ from .config import get_settings
 from .jobs import JobManager
 from .logging_config import configure_logging
 from .media import is_supported, safe_filename
-from .models import AlbumInput, JobDetail, JobListItem, JobSnapshot, JobUpload, TERMINAL_STATUSES
+from .models import (
+    AlbumInput,
+    ImageStyle,
+    JobDetail,
+    JobListItem,
+    JobSnapshot,
+    JobUpload,
+    TERMINAL_STATUSES,
+)
 from .pipeline import run_pipeline
 from .rendering import create_share_zip
 
@@ -227,6 +235,7 @@ async def create_job(
     location: Annotated[str, Form()] = "",
     companions: Annotated[str, Form()] = "",
     memory: Annotated[str, Form()] = "",
+    image_style: Annotated[ImageStyle, Form()] = ImageStyle.photo_revival,
     file_metadata: Annotated[str, Form()] = "[]",
 ) -> JobSnapshot:
     supported = [photo for photo in photos if photo.filename and is_supported(photo.filename)]
@@ -251,6 +260,7 @@ async def create_job(
         companions=companions.strip(),
         memory=memory.strip(),
         target_count=target_count,
+        image_style=image_style,
     )
     job_id = uuid.uuid4().hex
     job = await manager.create(job_id, album_input)
@@ -275,10 +285,11 @@ async def create_job(
             )
         manager.persist(job)
         logger.info(
-            "job_created job_id=%s photo_count=%d target_count=%d",
+            "job_created job_id=%s photo_count=%d target_count=%d image_style=%s",
             job_id,
             len(job.uploads),
             target_count,
+            image_style.value,
         )
     except Exception as exc:
         logger.exception("job_upload_failed job_id=%s photo_count=%d", job_id, len(supported))

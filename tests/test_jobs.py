@@ -149,6 +149,7 @@ def test_current_detail_and_photo_endpoint_restore_form_data(monkeypatch, tmp_pa
     assert detail.status_code == 200
     assert detail.json()["album_input"]["title"] == "Autumn Trip"
     assert detail.json()["album_input"]["target_count"] == 1
+    assert detail.json()["album_input"]["image_style"] == "photo-revival-v1"
     assert detail.json()["uploads"][0]["original_name"] == "photo.jpg"
     assert photo.status_code == 200
     assert photo.content == b"local-photo"
@@ -197,7 +198,11 @@ def test_create_job_waits_for_manual_start(monkeypatch, tmp_path):
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             created = await client.post(
                 "/api/jobs",
-                data={"title": "Manual task", "target_count": "1"},
+                data={
+                    "title": "Manual task",
+                    "target_count": "1",
+                    "image_style": "scenes-gathered-v1-3",
+                },
                 files={"photos": ("photo.jpg", image_bytes.getvalue(), "image/jpeg")},
             )
             jobs = await client.get("/api/jobs")
@@ -212,3 +217,4 @@ def test_create_job_waits_for_manual_start(monkeypatch, tmp_path):
     assert manager.current().task is None
     assert jobs.status_code == 200
     assert jobs.json()[0]["album_input"]["title"] == "Manual task"
+    assert jobs.json()[0]["album_input"]["image_style"] == "scenes-gathered-v1-3"

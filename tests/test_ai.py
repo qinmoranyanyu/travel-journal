@@ -7,7 +7,7 @@ import pytest
 
 from app.ai import OpenAIService
 from app.media import MediaPhoto
-from app.models import ImageAnalysis, NearbyLandmark, PhotoLocation
+from app.models import ImageAnalysis, ImageStyle, NearbyLandmark, PhotoLocation
 
 
 class FakeImageStream:
@@ -48,9 +48,14 @@ class FakeChatCompletions:
 def build_service(stream: FakeImageStream) -> tuple[OpenAIService, FakeImages]:
     images = FakeImages(stream)
     service = object.__new__(OpenAIService)
-    service.settings = SimpleNamespace(openai_image_model="gpt-image-1.5")
+    service.settings = SimpleNamespace(
+        openai_image_model="gpt-image-1.5",
+        image_generation_timeout_seconds=360,
+    )
     service.client = SimpleNamespace(images=images)
-    service.photo_revival_rules = "Preserve the source image."
+    service.image_style_rules = {
+        style: "Preserve the source image." for style in ImageStyle
+    }
     return service, images
 
 
@@ -64,7 +69,7 @@ def build_photo(source_path: Path) -> MediaPhoto:
     )
 
 
-def test_generate_revival_consumes_stream_completed_event(tmp_path):
+def test_generate_image_consumes_stream_completed_event(tmp_path):
     source_path = tmp_path / "source.jpg"
     source_path.write_bytes(b"source-image")
     expected = b"generated-image"
@@ -80,16 +85,22 @@ def test_generate_revival_consumes_stream_completed_event(tmp_path):
     service, images = build_service(stream)
     output_path = tmp_path / "generated" / "photo.png"
 
-    result = service.generate_revival(build_photo(source_path), "caption", output_path)
+    result = service.generate_image(
+        build_photo(source_path),
+        "这一刻被轻轻留在旅途中",
+        output_path,
+        ImageStyle.photo_revival,
+    )
 
     assert result == output_path
     assert output_path.read_bytes() == expected
     assert images.edit_kwargs["stream"] is True
     assert images.edit_kwargs["size"] == "1024x1536"
+    assert images.edit_kwargs["timeout"] == 360
     assert stream.closed is True
 
 
-def test_generate_revival_rejects_stream_without_completed_event(tmp_path):
+def test_generate_image_rejects_stream_without_completed_event(tmp_path):
     source_path = tmp_path / "source.jpg"
     source_path.write_bytes(b"source-image")
     stream = FakeImageStream(
@@ -99,7 +110,12 @@ def test_generate_revival_rejects_stream_without_completed_event(tmp_path):
     output_path = tmp_path / "generated" / "photo.png"
 
     with pytest.raises(RuntimeError, match="image_edit.completed"):
-        service.generate_revival(build_photo(source_path), "caption", output_path)
+        service.generate_image(
+            build_photo(source_path),
+            "Gathered light",
+            output_path,
+            ImageStyle.scenes_gathered,
+        )
 
     assert output_path.exists() is False
     assert stream.closed is True

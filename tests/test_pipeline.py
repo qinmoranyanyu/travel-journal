@@ -13,6 +13,7 @@ from app.jobs import Job
 from app.models import (
     AlbumInput,
     ImageAnalysis,
+    ImageStyle,
     JobSnapshot,
     JobStatus,
     NearbyLandmark,
@@ -67,7 +68,7 @@ class FlakyImageService:
             closing="end",
         )
 
-    def generate_revival(self, photo, caption, output_path: Path):
+    def generate_image(self, photo, caption, output_path: Path, image_style):
         type(self).generation_calls += 1
         if self.generation_calls <= 3:
             raise APIConnectionError(request=httpx.Request("POST", "https://example.test"))
@@ -79,10 +80,12 @@ class FlakyImageService:
 class StableImageService(FlakyImageService):
     generated_photo_ids: list[str] = []
     generated_captions: list[str] = []
+    generated_styles: list[ImageStyle] = []
 
-    def generate_revival(self, photo, caption, output_path: Path):
+    def generate_image(self, photo, caption, output_path: Path, image_style):
         type(self).generated_photo_ids.append(photo.id)
         type(self).generated_captions.append(caption)
+        type(self).generated_styles.append(image_style)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", (30, 40), "white").save(output_path)
         return output_path
@@ -94,7 +97,7 @@ class ConcurrentImageService(StableImageService):
     lock = threading.Lock()
     first_batch_barrier: threading.Barrier | None = None
 
-    def generate_revival(self, photo, caption, output_path: Path):
+    def generate_image(self, photo, caption, output_path: Path, image_style):
         with type(self).lock:
             type(self).active_calls += 1
             type(self).max_active_calls = max(
@@ -107,7 +110,7 @@ class ConcurrentImageService(StableImageService):
                 "photo-00002",
             }:
                 type(self).first_batch_barrier.wait(timeout=3)
-            return super().generate_revival(photo, caption, output_path)
+            return super().generate_image(photo, caption, output_path, image_style)
         finally:
             with type(self).lock:
                 type(self).active_calls -= 1
@@ -116,7 +119,7 @@ class ConcurrentImageService(StableImageService):
 class AlwaysFailImageService(FlakyImageService):
     generation_calls = 0
 
-    def generate_revival(self, photo, caption, output_path: Path):
+    def generate_image(self, photo, caption, output_path: Path, image_style):
         type(self).generation_calls += 1
         raise APIConnectionError(request=httpx.Request("POST", "https://example.test"))
 
@@ -139,7 +142,7 @@ class NoCallService:
     def create_story(self, photos, context):
         raise AssertionError("story checkpoint was not restored")
 
-    def generate_revival(self, photo, caption, output_path: Path):
+    def generate_image(self, photo, caption, output_path: Path, image_style):
         raise AssertionError("completed image was generated again")
 
 
@@ -360,12 +363,17 @@ def test_pipeline_generates_concurrently_and_waits_between_batches(
     settings.ensure_directories()
     job = Job(
         snapshot=JobSnapshot(id="job-two"),
-        album_input=AlbumInput(title="concurrent album", target_count=3),
+        album_input=AlbumInput(
+            title="concurrent album",
+            target_count=3,
+            image_style=ImageStyle.scenes_gathered,
+        ),
         workspace=workspace,
         uploads=upload_rows,
     )
     ConcurrentImageService.generated_photo_ids = []
     ConcurrentImageService.generated_captions = []
+    ConcurrentImageService.generated_styles = []
     ConcurrentImageService.active_calls = 0
     ConcurrentImageService.max_active_calls = 0
     ConcurrentImageService.first_batch_barrier = threading.Barrier(2)
@@ -396,6 +404,11 @@ def test_pipeline_generates_concurrently_and_waits_between_batches(
         "at the coast",
         "at the coast",
     ]
+    assert ConcurrentImageService.generated_styles == [
+        ImageStyle.scenes_gathered,
+        ImageStyle.scenes_gathered,
+        ImageStyle.scenes_gathered,
+    ]
     assert ConcurrentImageService.max_active_calls == 2
     assert sleep_calls == [2.5]
     assert "image_generation_batch_started job_id=job-two pass=initial" in caplog.text
@@ -404,6 +417,10 @@ def test_pipeline_generates_concurrently_and_waits_between_batches(
     assert job.snapshot.status == JobStatus.completed
     manifest_path = next((tmp_path / "outputs").glob("*/album.json"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["image_style"] == "scenes-gathered-v1-3"
+    assert (manifest["image_width"], manifest["image_height"]) == (900, 1500)
+    with Image.open(manifest_path.parent / manifest["photos"][0]["image"]) as generated:
+        assert generated.size == (900, 1500)
     assert [photo["caption"] for photo in manifest["photos"]] == [
         "poem line 1",
         "poem line 2",

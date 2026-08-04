@@ -21,6 +21,12 @@ class JobStatus(str, Enum):
     interrupted = "interrupted"
 
 
+class ImageStyle(str, Enum):
+    photo_revival = "photo-revival-v1"
+    scenes_gathered = "scenes-gathered-v1-3"
+    minimal_zine = "minimal-zine-v0-1"
+
+
 TERMINAL_STATUSES = {
     JobStatus.paused,
     JobStatus.completed,
@@ -36,6 +42,7 @@ class AlbumInput(BaseModel):
     companions: str = Field(default="", max_length=120)
     memory: str = Field(default="", max_length=500)
     target_count: int = Field(ge=1)
+    image_style: ImageStyle = ImageStyle.photo_revival
 
 
 class JobSnapshot(BaseModel):
@@ -95,6 +102,7 @@ class AlbumSummary(BaseModel):
     share_url: str
     zip_url: str | None = None
     export_urls: list[str] = Field(default_factory=list)
+    image_style: ImageStyle = ImageStyle.photo_revival
 
 
 class ImageAnalysis(BaseModel):
@@ -147,7 +155,7 @@ class StoryPlan(BaseModel):
 
 
 class AlbumManifest(BaseModel):
-    schema_version: int = 3
+    schema_version: int = 4
     id: str
     title: str
     location: str = ""
@@ -159,6 +167,9 @@ class AlbumManifest(BaseModel):
     closing: str = ""
     route_locations: list[str] = Field(default_factory=list)
     route_summary: str = ""
+    image_style: ImageStyle = ImageStyle.photo_revival
+    image_width: int = 1024
+    image_height: int = 1365
     chapters: list[dict[str, Any]]
     photos: list[dict[str, Any]]
     exports: list[str] = Field(default_factory=list)

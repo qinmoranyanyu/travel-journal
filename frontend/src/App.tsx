@@ -16,6 +16,7 @@ import {
   MapPin,
   Maximize2,
   Pause,
+  Palette,
   Play,
   Plus,
   Share2,
@@ -23,16 +24,45 @@ import {
   X
 } from "lucide-react";
 import { api, submitAlbum } from "./api";
-import type { AlbumSummary, Health, JobDetail, JobListItem, JobSnapshot, JobUpload } from "./types";
+import type { AlbumSummary, Health, ImageStyle, JobDetail, JobListItem, JobSnapshot, JobUpload } from "./types";
 
 const terminalStatuses = new Set(["paused", "completed", "partial", "failed", "interrupted"]);
 const previewLimit = 8;
+const defaultImageStyle: ImageStyle = "photo-revival-v1";
+const imageStyles: Array<{
+  id: ImageStyle;
+  name: string;
+  description: string;
+  preview: string;
+}> = [
+  {
+    id: "photo-revival-v1",
+    name: "旅行手绘",
+    description: "保留人物与场景，重绘成白纸、水彩和手写笔记。",
+    preview: "/style-previews/photo-revival.jpg"
+  },
+  {
+    id: "scenes-gathered-v1-3",
+    name: "拾景纸刊",
+    description: "保留部分真实照片，结合撕纸、抽象插画与单一亮色。",
+    preview: "/style-previews/scenes-gathered.jpg"
+  },
+  {
+    id: "minimal-zine-v0-1",
+    name: "极简纸刊",
+    description: "大面积旧纸留白，以小型主体和实验排版构成海报。",
+    preview: "/style-previews/minimal-zine.jpg"
+  }
+];
+const imageStyleNames = Object.fromEntries(
+  imageStyles.map((style) => [style.id, style.name])
+) as Record<ImageStyle, string>;
 const stages = [
   { id: "metadata", label: "整理时间" },
   { id: "location", label: "解析地点" },
   { id: "analysis", label: "理解画面" },
   { id: "story", label: "编排故事" },
-  { id: "generation", label: "手绘重生" },
+  { id: "generation", label: "风格生成" },
   { id: "export", label: "装帧导出" }
 ];
 
@@ -71,6 +101,7 @@ function App() {
   const [companions, setCompanions] = useState("");
   const [memory, setMemory] = useState("");
   const [targetCount, setTargetCount] = useState(20);
+  const [imageStyle, setImageStyle] = useState<ImageStyle>(defaultImageStyle);
   const [showAllPhotos, setShowAllPhotos] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -159,6 +190,7 @@ function App() {
     setCompanions(detail.album_input.companions);
     setMemory(detail.album_input.memory);
     setTargetCount(detail.album_input.target_count);
+    setImageStyle(detail.album_input.image_style || defaultImageStyle);
     setFiles([]);
     setRestoredUploads(detail.uploads);
     setShowAllPhotos(false);
@@ -204,6 +236,7 @@ function App() {
     data.append("companions", companions.trim());
     data.append("memory", memory.trim());
     data.append("target_count", String(targetCount));
+    data.append("image_style", imageStyle);
     files.forEach((file) => data.append("photos", file, file.name));
     data.append(
       "file_metadata",
@@ -234,6 +267,7 @@ function App() {
     setCompanions("");
     setMemory("");
     setTargetCount(20);
+    setImageStyle(defaultImageStyle);
     setShowAllPhotos(false);
     setError("");
   }
@@ -301,12 +335,17 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand-mark"><Archive size={19} strokeWidth={1.8} /></div>
-        <div>
+        <div className="brand-copy">
           <p>LOCAL PHOTO ARCHIVE</p>
           <h1>旅迹编年</h1>
         </div>
-        <div className={`api-state ${health?.api_configured ? "is-ready" : ""}`}>
-          <span />{health?.api_configured ? `${health.text_model} / ${health.image_model}` : "等待 API 配置"}
+        <div
+          className={`api-state ${health?.api_configured ? "is-ready" : ""}`}
+          title={health?.api_configured ? `${health.text_model} / ${health.image_model}` : "等待 API 配置"}
+        >
+          <span className="api-state__dot" />
+          <span className="api-state__detail">{health?.api_configured ? `${health.text_model} / ${health.image_model}` : "等待 API 配置"}</span>
+          <span className="api-state__compact">{health?.api_configured ? "API 正常" : "未配置"}</span>
         </div>
       </header>
 
@@ -363,6 +402,34 @@ function App() {
               <label className="field"><span>目标成片数 *</span><input disabled={formLocked} type="number" min={1} value={targetCount} onChange={(e) => setTargetCount(Math.max(1, Number(e.target.value)))} required /></label>
             </div>
 
+            <fieldset className="style-picker" disabled={formLocked}>
+              <legend>成片风格</legend>
+              <div className="style-picker__grid">
+                {imageStyles.map((style) => {
+                  const selected = imageStyle === style.id;
+                  return (
+                    <label className={`style-option ${selected ? "is-selected" : ""}`} key={style.id}>
+                      <input
+                        type="radio"
+                        name="image-style"
+                        value={style.id}
+                        checked={selected}
+                        onChange={() => setImageStyle(style.id)}
+                      />
+                      <span className="style-option__preview">
+                        <img src={style.preview} alt="" loading="lazy" decoding="async" />
+                        <span className="style-option__check"><Check size={15} strokeWidth={2.4} /></span>
+                      </span>
+                      <span className="style-option__copy">
+                        <strong>{style.name}</strong>
+                        <small>{style.description}</small>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
+
             {error && <div className="form-error">{error}</div>}
             <button className="primary-button" type="submit" disabled={formLocked || submitting || !files.length || !title.trim() || !health?.api_configured}>
               {submitting ? <LoaderCircle className="spin" size={19} /> : <Plus size={19} />}
@@ -384,6 +451,7 @@ function App() {
           />
           <TaskProgress
             job={job}
+            imageStyle={imageStyle}
             actionPending={taskActionPending}
             onStart={startCurrentJob}
             onPause={pauseCurrentJob}
@@ -640,7 +708,7 @@ const TaskIndex = memo(function TaskIndex({
                   : <span className="task-index__blank"><Images size={17} /></span>}
                 <span className="task-index__copy">
                   <strong>{item.album_input.title}</strong>
-                  <small>{item.upload_count} 张 · {new Date(item.snapshot.updated_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</small>
+                  <small>{imageStyleNames[item.album_input.image_style || defaultImageStyle]} · {item.upload_count} 张 · {new Date(item.snapshot.updated_at).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</small>
                 </span>
                 <span className={`task-status task-status--${item.snapshot.status}`}>{jobStatusLabels[item.snapshot.status]}</span>
               </button>
@@ -654,12 +722,14 @@ const TaskIndex = memo(function TaskIndex({
 
 const TaskProgress = memo(function TaskProgress({
   job,
+  imageStyle,
   actionPending,
   onStart,
   onPause,
   onStopRetries
 }: {
   job: JobSnapshot | null;
+  imageStyle: ImageStyle;
   actionPending: boolean;
   onStart: () => void;
   onPause: () => void;
@@ -678,6 +748,7 @@ const TaskProgress = memo(function TaskProgress({
         <div className="task-empty"><span className="empty-frame" /><p>从任务索引选择任务，或新建任务</p></div>
       ) : (
         <>
+          <div className="task-style"><Palette size={14} />{imageStyleNames[imageStyle]}</div>
           <div className="film-progress" style={{ "--progress": `${job.progress}%` } as React.CSSProperties}>
             <div className="film-progress__fill" />
             {stages.map((stage, index) => (
@@ -749,7 +820,7 @@ const AlbumHistory = memo(function AlbumHistory({ albums }: { albums: AlbumSumma
         {albums.slice(0, 6).map((album) => (
           <article className="album-item" key={album.id}>
             {album.cover_url ? <img src={album.cover_url} alt="" /> : <div className="album-item__blank" />}
-            <div><span>{new Date(album.created_at).toLocaleDateString("zh-CN")} · {album.photo_count} 张</span><h3>{album.title}</h3><p>{album.location || "沿途手记"}</p></div>
+            <div><span>{new Date(album.created_at).toLocaleDateString("zh-CN")} · {imageStyleNames[album.image_style || defaultImageStyle]} · {album.photo_count} 张</span><h3>{album.title}</h3><p>{album.location || "沿途手记"}</p></div>
             <div className="album-item__actions">
               <a href={album.share_url} target="_blank" rel="noreferrer" aria-label={`打开${album.title}分享页面`} title="打开分享页面"><Share2 size={17} /></a>
               <a href={album.output_url} target="_blank" rel="noreferrer" aria-label={`打开${album.title} Web 页面`} title="打开 Web 页面"><Globe2 size={17} /></a>

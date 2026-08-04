@@ -1,4 +1,5 @@
 export type JobStatus = "queued" | "running" | "paused" | "completed" | "partial" | "failed" | "interrupted";
+export type ImageStyle = "photo-revival-v1" | "scenes-gathered-v1-3" | "minimal-zine-v0-1";
 
 export interface JobSnapshot {
   id: string;
@@ -31,6 +32,7 @@ export interface AlbumInput {
   companions: string;
   memory: string;
   target_count: number;
+  image_style: ImageStyle;
 }
 
 export interface JobUpload {
@@ -65,6 +67,7 @@ export interface AlbumSummary {
   share_url: string;
   zip_url?: string | null;
   export_urls: string[];
+  image_style: ImageStyle;
 }
 
 export interface Health {

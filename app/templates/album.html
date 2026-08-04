@@ -7,7 +7,7 @@
   <title>{{ album.title }}</title>
   <link rel="stylesheet" href="assets/styles/album.css">
 </head>
-<body>
+<body style="--photo-aspect: {{ album.image_width }} / {{ album.image_height }}">
   <header class="cover">
     <div class="cover__index">TRAVEL FIELD NOTES / {{ album.created_at[:10] }}</div>
     <div class="cover__body">
@@ -36,7 +36,7 @@
       <div class="chapter__photos">
         {% for photo in chapter.photos %}
         <figure class="memory memory--{{ loop.index0 % 3 }}">
-          <img src="{{ photo.image }}" alt="{{ photo.description }}" loading="lazy" width="1024" height="1365">
+          <img src="{{ photo.image }}" alt="{{ photo.description }}" loading="lazy" width="{{ album.image_width }}" height="{{ album.image_height }}">
           <figcaption>
             <span class="memory__date">{{ photo.display_date }}</span>
             <div class="memory__body">

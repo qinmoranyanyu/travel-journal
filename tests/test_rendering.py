@@ -3,7 +3,7 @@ import zipfile
 
 from PIL import Image
 
-from app.models import AlbumManifest
+from app.models import AlbumManifest, ImageStyle
 from app.rendering import create_share_zip, render_album
 
 
@@ -23,6 +23,9 @@ def test_rendered_album_is_portable_and_zip_excludes_sources(tmp_path):
         closing="旅程已经结束，沿途仍留在纸上。",
         route_locations=["杭州 · 孤山"],
         route_summary="杭州 · 孤山",
+        image_style=ImageStyle.minimal_zine,
+        image_width=900,
+        image_height=1500,
         chapters=[{"id": "chapter-1", "title": "出发", "intro": "沿着清晰的时间顺序出发。", "photo_ids": ["p1"]}],
         photos=[
             {
@@ -48,6 +51,10 @@ def test_rendered_album_is_portable_and_zip_excludes_sources(tmp_path):
     assert album_data["photos"][0]["display_location"] == "杭州 · 孤山"
     assert album_data["photos"][0]["capture_location"] == "杭州 · 北山街道"
     assert album_data["photos"][0]["nearby_landmark"] == "孤山"
+    assert album_data["image_style"] == "minimal-zine-v0-1"
+    assert "--photo-aspect: 900 / 1500" in (output / "index.html").read_text(
+        encoding="utf-8"
+    )
     assert "latitude" not in json.dumps(album_data)
     assert "distance_meters" not in json.dumps(album_data)
     album_html = (output / "index.html").read_text(encoding="utf-8")
