@@ -121,6 +121,32 @@ def test_generate_image_rejects_stream_without_completed_event(tmp_path):
     assert stream.closed is True
 
 
+def test_generate_image_preserves_multiline_mixed_caption_in_prompt(tmp_path):
+    source_path = tmp_path / "source.jpg"
+    source_path.write_bytes(b"source-image")
+    stream = FakeImageStream(
+        [
+            SimpleNamespace(
+                type="image_edit.completed",
+                b64_json=base64.b64encode(b"generated-image").decode("ascii"),
+            )
+        ]
+    )
+    service, images = build_service(stream)
+    caption = "Cloud / Ridge / Silence\n山在雾里\n1998.07"
+
+    service.generate_image(
+        build_photo(source_path),
+        caption,
+        tmp_path / "generated.jpg",
+        ImageStyle.scenes_gathered,
+    )
+
+    assert f"<caption>\n{caption}\n</caption>" in images.edit_kwargs["prompt"]
+    assert "exact English phrase" not in images.edit_kwargs["prompt"]
+    assert "Do not add dates" not in images.edit_kwargs["prompt"]
+
+
 def test_location_metadata_is_separated_and_nearby_wording_is_constrained(tmp_path):
     source_path = tmp_path / "source.jpg"
     source_path.write_bytes(b"source-image")
@@ -191,6 +217,7 @@ def test_story_uses_separate_image_captions_and_complete_page_poem(tmp_path):
         photos.append(photo)
 
     service = object.__new__(OpenAIService)
+    service.story_caption_rules = {style: "" for style in ImageStyle}
     captured = []
 
     def capture(content):
@@ -216,6 +243,7 @@ def test_story_uses_separate_image_captions_and_complete_page_poem(tmp_path):
     prompt = json.loads(captured[0][0]["text"])
     requirements = "\n".join(prompt["requirements"])
     assert "图片内部的独立短旁白" in requirements
+    assert "4-30" in requirements
     assert "连起来必须是一首完整" in requirements
     assert prompt["output"]["poem_lines"]
     assert plan.chapters[0].photo_ids == [photo.id for photo in photos]
@@ -223,3 +251,46 @@ def test_story_uses_separate_image_captions_and_complete_page_poem(tmp_path):
     assert plan.poem_lines[photos[0].id] == "风从旅途的第一页起身，"
     assert "温柔的回声" in plan.poem_lines[photos[1].id]
     assert all(plan.poem_lines[photo.id] != plan.captions[photo.id] for photo in photos)
+
+
+def test_story_uses_upstream_rules_and_keeps_new_style_caption_verbatim(tmp_path):
+    photo = build_photo(tmp_path / "source.jpg")
+    photo.analysis = ImageAnalysis(
+        photo_id=photo.id,
+        description="云雾中的山脊",
+        caption_seed="山脊被云雾轻轻遮住",
+    )
+    caption = "Cloud / Ridge / Silence\n山在雾里\n1998.07"
+    service = object.__new__(OpenAIService)
+    service.story_caption_rules = {
+        ImageStyle.scenes_gathered: "## Micro-Text System\nCloud / Ridge / Silence"
+    }
+    captured = []
+
+    def capture(content):
+        captured.append(content)
+        return {
+            "cover_subtitle": "山间",
+            "chapters": [
+                {
+                    "id": "chapter-1",
+                    "title": "雾线",
+                    "intro": "山脊在云雾之间显出轮廓。",
+                    "photo_ids": [photo.id],
+                }
+            ],
+            "captions": {photo.id: caption},
+            "poem_lines": {photo.id: "雾沿山脊缓慢经过。"},
+            "closing": "山仍留在云后。",
+        }
+
+    service._chat_json = capture
+    plan = service.create_story(
+        [photo],
+        {"title": "山间", "image_style": ImageStyle.scenes_gathered.value},
+    )
+
+    prompt = json.loads(captured[0][0]["text"])
+    assert prompt["upstream_image_text_rules"].startswith("## Micro-Text System")
+    assert "caption_seed" not in prompt["photos"][0]
+    assert plan.captions[photo.id] == caption

@@ -15,6 +15,7 @@ from .config import Settings
 from .image_styles import (
     get_image_style_spec,
     load_image_style_rules,
+    load_story_caption_rules,
     normalize_image_caption,
 )
 from .media import MediaPhoto
@@ -38,6 +39,9 @@ class OpenAIService:
         self.image_style_rules = {
             style: load_image_style_rules(settings, style) for style in ImageStyle
         }
+        self.story_caption_rules = {
+            style: load_story_caption_rules(settings, style) for style in ImageStyle
+        }
 
     def analyze_photos(self, photos: list[MediaPhoto]) -> list[ImageAnalysis]:
         content: list[dict[str, Any]] = [
@@ -53,7 +57,7 @@ class OpenAIService:
                     "story_value 和 technical_quality 是 0 到 1 的小数。输出 JSON："
                     '{"photos":[{"photo_id":"...","description":"...","category":"...",'
                     '"story_value":0.5,"technical_quality":0.5,"memorable_details":["..."],'
-                    '"caption_seed":"10-30字克制中文旁白"}]}。'
+                    '"caption_seed":"4-30字克制中文旁白"}]}。'
                 ),
             }
         ]
@@ -156,10 +160,15 @@ class OpenAIService:
                     "description": analysis.description if analysis else "",
                     "category": analysis.category if analysis else "其他",
                     "details": (analysis.memorable_details if analysis else [])[:3],
-                    "caption_seed": analysis.caption_seed if analysis else "",
+                    **(
+                        {"caption_seed": analysis.caption_seed if analysis else ""}
+                        if image_style == ImageStyle.photo_revival
+                        else {}
+                    ),
                 }
             )
 
+        upstream_caption_rules = self.story_caption_rules[image_style]
         prompt = {
             "role": "你是一位克制的中文旅行手记编辑。",
             "requirements": [
@@ -173,6 +182,7 @@ class OpenAIService:
                 "地点措辞应自然克制，优先使用城市、区域或景点名称，不在旁白中堆砌完整门牌地址。",
                 "避免时光定格、岁月静好、奔赴山海等套话。",
                 "时间可信度为 estimated 时，不写清晨、傍晚、第二天等具体推断。",
+                "上述事实与叙事约束适用于 cover_subtitle、chapters、closing 和 poem_lines；captions 只遵循所选图片风格的文案规则。",
                 style_spec.story_caption_requirement,
                 "poem_lines 是 HTML 页面和分享长图中每张照片下方的诗行；必须覆盖每个 photo_id，且不得直接复制同一张的 captions。",
                 "严格按照 photos 的当前顺序创作 poem_lines，所有诗行依次连起来必须是一首完整、连贯、符合整组照片意境的中文诗。现代诗、古体诗或其他诗体均可，但整首风格与语气必须统一。",
@@ -194,6 +204,8 @@ class OpenAIService:
                 "closing": "旅程回望",
             },
         }
+        if upstream_caption_rules:
+            prompt["upstream_image_text_rules"] = upstream_caption_rules
         payload = self._chat_json([{"type": "text", "text": json.dumps(prompt, ensure_ascii=False)}])
         try:
             plan = StoryPlan.model_validate(payload)
@@ -218,7 +230,7 @@ class OpenAIService:
         image_style = ImageStyle(image_style)
         prompt = _build_image_prompt(
             photo,
-            normalize_image_caption(image_style, caption),
+            caption,
             image_style,
             self.image_style_rules[image_style],
         )
@@ -334,12 +346,14 @@ def _build_image_prompt(
     description = analysis.description if analysis else photo.original_name
     details = "、".join((analysis.memorable_details if analysis else [])[:3])
     location_note = photo.location.display_name if photo.location else "not available"
+    caption_block = f"<caption>\n{caption}\n</caption>"
     common = (
         "Photo-specific direction:\n"
         f"Source subject and spatial relationship: {description}.\n"
         f"Memorable source details: {details or 'the main subject and atmosphere'}.\n"
-        f"Known capture location for semantic context only: {location_note}. "
-        "Do not render the location as text.\n"
+        f"Known capture location for semantic context: {location_note}. "
+        "Do not independently add it as text unless it is already present in the supplied "
+        "caption block.\n"
     )
     if image_style == ImageStyle.photo_revival:
         date_note = (
@@ -360,8 +374,11 @@ def _build_image_prompt(
             "source-derived high-chroma structure around that anchor. Keep all important "
             "content within the central 90% of the canvas for final 3:5 cropping.\n"
             f"{common}"
-            f"The only micro-text is this exact English phrase: {caption}\n"
-            "Do not add dates, labels, coordinates, signatures, or any other text.\n"
+            "Use the supplied caption block as the complete readable text content. Render it "
+            "verbatim, preserving every language, line break, punctuation mark, and separator; "
+            "do not translate, rewrite, flatten, or append text. Apply the upstream micro-text "
+            "hierarchy and material treatment.\n"
+            f"{caption_block}\n"
         )
     else:
         variation = _minimal_zine_variation(photo.id)
@@ -373,8 +390,11 @@ def _build_image_prompt(
             "cropping.\n"
             f"{common}"
             f"Variation recipe for this page: {variation}.\n"
-            f"The only readable text is this exact Chinese phrase: {caption}\n"
-            "Do not add dates, labels, coordinates, signatures, or any other text.\n"
+            "Use the supplied caption block as the complete readable text content. Render it "
+            "verbatim, preserving every language, line break, punctuation mark, fragment, and "
+            "metadata-like element; do not translate, rewrite, flatten, or append text. Apply "
+            "the upstream typography mode freely to its hierarchy and placement.\n"
+            f"{caption_block}\n"
         )
     return (
         f"Follow the {get_image_style_spec(image_style).skill_name} visual rules below. "
@@ -444,10 +464,7 @@ def _fallback_story(photos: list[MediaPhoto], context: dict[str, Any]) -> StoryP
     )
     ids = [photo.id for photo in photos]
     captions = {
-        photo.id: normalize_image_caption(
-            image_style,
-            photo.analysis.caption_seed if photo.analysis else "",
-        )
+        photo.id: _fallback_image_caption(photo, image_style)
         for photo in photos
     }
     return StoryPlan(
@@ -521,16 +538,26 @@ def _repair_story(
     for photo in photos:
         plan.captions.setdefault(
             photo.id,
-            photo.analysis.caption_seed if photo.analysis else "这一刻被轻轻留下",
+            _fallback_image_caption(photo, image_style),
         )
-        plan.captions[photo.id] = normalize_image_caption(
-            image_style,
-            plan.captions[photo.id],
-        )
+        if image_style == ImageStyle.photo_revival:
+            plan.captions[photo.id] = normalize_image_caption(
+                image_style,
+                plan.captions[photo.id],
+            )
         poem_line = plan.poem_lines.get(photo.id, "").strip()
         if not poem_line or poem_line == plan.captions[photo.id].strip():
             plan.poem_lines[photo.id] = fallback_poem[photo.id]
     return plan
+
+
+def _fallback_image_caption(photo: MediaPhoto, image_style: ImageStyle) -> str:
+    seed = photo.analysis.caption_seed if photo.analysis else ""
+    if image_style == ImageStyle.scenes_gathered:
+        return "Gathered along the way"
+    if image_style == ImageStyle.minimal_zine:
+        return seed or "沿途微光"
+    return normalize_image_caption(image_style, seed)
 
 
 def _fallback_poem_lines(photos: list[MediaPhoto]) -> dict[str, str]:
