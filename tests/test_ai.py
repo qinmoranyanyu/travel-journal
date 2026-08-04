@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.ai import OpenAIService
+from app.ai import OpenAIService, _fallback_image_caption, _fallback_poem_lines
 from app.media import MediaPhoto
 from app.models import ImageAnalysis, ImageStyle, NearbyLandmark, PhotoLocation
 
@@ -143,8 +143,37 @@ def test_generate_image_preserves_multiline_mixed_caption_in_prompt(tmp_path):
     )
 
     assert f"<caption>\n{caption}\n</caption>" in images.edit_kwargs["prompt"]
+    assert "Page-specific typography recipe:" in images.edit_kwargs["prompt"]
+    assert "do not collapse them into one uniform paragraph" in images.edit_kwargs["prompt"]
     assert "exact English phrase" not in images.edit_kwargs["prompt"]
     assert "Do not add dates" not in images.edit_kwargs["prompt"]
+
+
+def test_minimal_zine_prompt_assigns_distinct_typographic_roles(tmp_path):
+    source_path = tmp_path / "source.jpg"
+    source_path.write_bytes(b"source-image")
+    stream = FakeImageStream(
+        [
+            SimpleNamespace(
+                type="image_edit.completed",
+                b64_json=base64.b64encode(b"generated-image").decode("ascii"),
+            )
+        ]
+    )
+    service, images = build_service(stream)
+    caption = "风从窄巷经过\nA TURN IN THE ROAD\n2026.08.05"
+
+    service.generate_image(
+        build_photo(source_path),
+        caption,
+        tmp_path / "generated.jpg",
+        ImageStyle.minimal_zine,
+    )
+
+    prompt = images.edit_kwargs["prompt"]
+    assert f"<caption>\n{caption}\n</caption>" in prompt
+    assert "Page-specific typography recipe:" in prompt
+    assert "one memorable typographic event" in prompt
 
 
 def test_location_metadata_is_separated_and_nearby_wording_is_constrained(tmp_path):
@@ -245,11 +274,14 @@ def test_story_uses_separate_image_captions_and_complete_page_poem(tmp_path):
     assert "图片内部的独立短旁白" in requirements
     assert "4-30" in requirements
     assert "连起来必须是一首完整" in requirements
+    assert "主韵部" in requirements
+    assert "相邻两行或隔行" in requirements
+    assert "语意和画面事实优先" in requirements
     assert prompt["output"]["poem_lines"]
     assert plan.chapters[0].photo_ids == [photo.id for photo in photos]
     assert list(plan.poem_lines) == [photo.id for photo in photos]
-    assert plan.poem_lines[photos[0].id] == "风从旅途的第一页起身，"
-    assert "温柔的回声" in plan.poem_lines[photos[1].id]
+    assert plan.poem_lines[photos[0].id].endswith("天光，")
+    assert plan.poem_lines[photos[1].id].endswith("相框。")
     assert all(plan.poem_lines[photo.id] != plan.captions[photo.id] for photo in photos)
 
 
@@ -292,5 +324,30 @@ def test_story_uses_upstream_rules_and_keeps_new_style_caption_verbatim(tmp_path
 
     prompt = json.loads(captured[0][0]["text"])
     assert prompt["upstream_image_text_rules"].startswith("## Micro-Text System")
+    assert "2-4 个文字层级" in "\n".join(prompt["requirements"])
+    assert "\n" in prompt["output"]["captions"]["photo_id"]
     assert "caption_seed" not in prompt["photos"][0]
     assert plan.captions[photo.id] == caption
+
+
+def test_fallback_zine_captions_are_multilevel_and_fallback_poem_uses_one_rhyme(tmp_path):
+    photos = []
+    for index in range(4):
+        photo = build_photo(tmp_path / f"source-{index}.jpg")
+        photo.id = f"photo-{index + 1:05d}"
+        photo.analysis = ImageAnalysis(
+            photo_id=photo.id,
+            description="湖面与远山",
+            category="风景",
+            caption_seed="雨后湖面泛起微光",
+        )
+        photos.append(photo)
+
+    gathered = _fallback_image_caption(photos[0], ImageStyle.scenes_gathered)
+    minimal = _fallback_image_caption(photos[1], ImageStyle.minimal_zine)
+    poem = _fallback_poem_lines(photos)
+
+    assert len(gathered.splitlines()) >= 2
+    assert "LAND / LIGHT / DISTANCE" in gathered
+    assert len(minimal.splitlines()) >= 2
+    assert [line[-2] for line in poem.values()] == ["光", "长", "晃", "框"]

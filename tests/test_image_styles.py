@@ -48,12 +48,16 @@ def test_upstream_skills_are_compiled_to_pixel_level_prompt_rules():
 
     assert "## Runtime visual compiler" in gathered
     assert "hand-torn contour" in gathered
+    assert "page-specific typography recipe" in gathered
+    assert "at most two compatible lettering materials" in gathered
     assert "supplied English micro-text" not in gathered
     assert "## Generation Workflow" not in gathered
     assert "## Output Format" not in gathered
     assert len(gathered) < 6_000
     assert "## Runtime visual compiler" in minimal
     assert "70%-90% plain paper" in minimal
+    assert "one deliberate typography event" in minimal
+    assert "vertical text rail" in minimal
     assert "supplied Chinese phrase" not in minimal
     assert "## Output Format" not in minimal
     assert len(minimal) < 5_000
@@ -68,6 +72,7 @@ def test_story_caption_rules_are_read_from_pinned_upstream_skills():
     assert "## Micro-Text System" in gathered
     assert "Cloud / Ridge / Silence" in gathered
     assert "Chinese–English pairing" in gathered
+    assert "keyword sequence" in gathered
     assert "optional tiny date/location/weather and signature" in minimal
     assert "### Typography Mode" in minimal
     assert "invent one short poetic English or Chinese phrase" in minimal

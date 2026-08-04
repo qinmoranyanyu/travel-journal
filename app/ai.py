@@ -186,6 +186,8 @@ class OpenAIService:
                 style_spec.story_caption_requirement,
                 "poem_lines 是 HTML 页面和分享长图中每张照片下方的诗行；必须覆盖每个 photo_id，且不得直接复制同一张的 captions。",
                 "严格按照 photos 的当前顺序创作 poem_lines，所有诗行依次连起来必须是一首完整、连贯、符合整组照片意境的中文诗。现代诗、古体诗或其他诗体均可，但整首风格与语气必须统一。",
+                "开始写 poem_lines 前先为整首选定一个主韵部（如 ang、an、ao、ou、eng），让相邻两行或隔行的句末形成可听见的押韵；照片较多时可按章节或每 4 行自然换韵，但同一小节不要频繁换韵。",
+                "押韵采用中文宽韵即可，语意和画面事实优先，不要生硬倒装、堆叠语气词，也不要为了凑韵反复使用时光、远方、心上、故乡等套词。",
             ],
             "trip": context,
             "photos": photo_rows,
@@ -367,6 +369,7 @@ def _build_image_prompt(
             f"Tiny English field note/date: FIELD NOTE / {date_note}\n"
         )
     elif image_style == ImageStyle.scenes_gathered:
+        typography = _zine_typography_variation(photo.id, image_style)
         direction = (
             "Create one vertical 3:5 paper poster. Keep the source scene recognizable and "
             "preserve a truthful photographic anchor, without promising pixel-identical "
@@ -374,6 +377,9 @@ def _build_image_prompt(
             "source-derived high-chroma structure around that anchor. Keep all important "
             "content within the central 90% of the canvas for final 3:5 cropping.\n"
             f"{common}"
+            f"Page-specific typography recipe: {typography}. "
+            "Keep the caption's separate lines visibly distinct in scale, material, alignment, "
+            "or orientation; do not collapse them into one uniform paragraph. "
             "Use the supplied caption block as the complete readable text content. Render it "
             "verbatim, preserving every language, line break, punctuation mark, and separator; "
             "do not translate, rewrite, flatten, or append text. Apply the upstream micro-text "
@@ -382,6 +388,7 @@ def _build_image_prompt(
         )
     else:
         variation = _minimal_zine_variation(photo.id)
+        typography = _zine_typography_variation(photo.id, image_style)
         direction = (
             "Create one vertical 3:5 minimal zine poster. Recompose the source radically, but "
             "retain at least one clearly recognizable source-derived subject, silhouette, or "
@@ -390,6 +397,10 @@ def _build_image_prompt(
             "cropping.\n"
             f"{common}"
             f"Variation recipe for this page: {variation}.\n"
+            f"Page-specific typography recipe: {typography}. "
+            "Use the caption's line breaks as distinct editorial roles, with one memorable "
+            "typographic event and quieter supporting text; do not collapse them into one "
+            "uniform paragraph. "
             "Use the supplied caption block as the complete readable text content. Render it "
             "verbatim, preserving every language, line break, punctuation mark, fragment, and "
             "metadata-like element; do not translate, rewrite, flatten, or append text. Apply "
@@ -442,6 +453,27 @@ def _minimal_zine_variation(photo_id: str) -> str:
             colors[digest[3] % len(colors)],
         )
     )
+
+
+def _zine_typography_variation(photo_id: str, image_style: ImageStyle) -> str:
+    if image_style == ImageStyle.scenes_gathered:
+        recipes = (
+            "dry-ink serif primary line aligned to the torn contour, a smaller typewriter echo, and faint pencil factual microtext",
+            "a compact typewriter keyword row in open paper, paired with one restrained vertical Song-style echo near the illustration field",
+            "one worn-stamp phrase bridging the photo-to-paper handoff, with a quiet monospaced note set well apart",
+            "lightly imperfect handwriting following a source-derived contour, balanced by a small letterpress line on a strict baseline",
+            "a narrow left-aligned serif column with generous line spacing, plus a tiny dry-ink footer close to the photographic anchor",
+        )
+    else:
+        recipes = (
+            "fragmented rough-letterpress primary words within the visual cluster, paired with a tiny monospaced archive stack",
+            "one short serif phrase pressed against the image edge, with a faint handwritten fragment drifting into open paper",
+            "a slim vertical typewriter rail beside the subject, balanced by one low-contrast horizontal ghost line",
+            "a compact date-or-place microtext block above the anchor, with the primary phrase printed inside the high-chroma form",
+            "one restrained type-led composition using a large cropped word, supported by tiny widely spaced letterpress text",
+        )
+    digest = hashlib.sha256(f"{image_style.value}:{photo_id}".encode("utf-8")).digest()
+    return recipes[digest[0] % len(recipes)]
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
@@ -552,32 +584,72 @@ def _repair_story(
 
 
 def _fallback_image_caption(photo: MediaPhoto, image_style: ImageStyle) -> str:
-    seed = photo.analysis.caption_seed if photo.analysis else ""
+    analysis = photo.analysis
+    seed = analysis.caption_seed if analysis else ""
+    observation = seed or (analysis.description if analysis else "") or "沿途所见"
+    observation = observation.strip()[:30]
+    metadata = _fallback_caption_metadata(photo)
     if image_style == ImageStyle.scenes_gathered:
-        return "Gathered along the way"
+        category = analysis.category if analysis else "其他"
+        keywords = {
+            "人物": "FIGURE / PAUSE / AIR",
+            "风景": "LAND / LIGHT / DISTANCE",
+            "建筑": "WALL / WINDOW / SHADOW",
+            "食物": "TABLE / TASTE / WARMTH",
+            "交通": "ROAD / MOTION / RETURN",
+            "细节": "TRACE / TEXTURE / LIGHT",
+            "活动": "MOTION / VOICE / SCENE",
+        }.get(category, "SCENE / LIGHT / AIR")
+        lines = [keywords, observation]
+        if metadata:
+            lines.append(metadata)
+        return "\n".join(lines)
     if image_style == ImageStyle.minimal_zine:
-        return seed or "沿途微光"
+        secondary = (
+            "A SMALL TURN IN THE ROAD"
+            if int(hashlib.sha256(photo.id.encode("utf-8")).hexdigest(), 16) % 2
+            else "TRACES LEFT IN PASSING"
+        )
+        lines = [observation, secondary]
+        if metadata:
+            lines.append(metadata)
+        return "\n".join(lines)
     return normalize_image_caption(image_style, seed)
+
+
+def _fallback_caption_metadata(photo: MediaPhoto) -> str:
+    parts: list[str] = []
+    if photo.capture_time:
+        parts.append(photo.capture_time.strftime("%Y.%m.%d"))
+    if photo.location:
+        location = (
+            photo.location.poi_name
+            or photo.location.district
+            or photo.location.city
+        ).strip()
+        if location:
+            parts.append(location)
+    return " · ".join(parts)
 
 
 def _fallback_poem_lines(photos: list[MediaPhoto]) -> dict[str, str]:
     if not photos:
         return {}
     if len(photos) == 1:
-        return {photos[0].id: "这一程的风景，在回望里落成一首安静的诗。"}
+        return {photos[0].id: "这一程的风景，在回望里仍有余响。"}
 
     lines: dict[str, str] = {}
     middle_lines = (
-        "光沿着山水，把道路写向更远处，",
-        "偶然相逢的颜色，被风轻轻收拢，",
-        "脚步穿过人间，也穿过安静的云，",
-        "未说完的话，留在一程又一程风景里，",
+        "山水把蜿蜒的路，写得更长，",
+        "偶然相逢的颜色，在眼底轻晃，",
+        "脚步穿过街巷，也穿过云旁，",
+        "未说完的话，被一程风景收藏，",
     )
     for index, photo in enumerate(photos):
         if index == 0:
-            line = "风从旅途的第一页起身，"
+            line = "风从旅途的第一页，吹进天光，"
         elif index == len(photos) - 1:
-            line = "直到所有远方，都在这一页成为温柔的回声。"
+            line = "回头时，一路风景都留在相框。"
         else:
             line = middle_lines[(index - 1) % len(middle_lines)]
         lines[photo.id] = line

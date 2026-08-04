@@ -69,10 +69,15 @@ IMAGE_STYLE_SPECS: dict[ImageStyle, ImageStyleSpec] = {
         generation_noun="拾景纸刊页",
         story_caption_requirement=(
             "captions 是写进生成图片内部的文字内容。逐张依据 upstream_image_text_rules "
-            "创作，保留上游支持的语言模式、标点、分隔符和多行层级，不要附加应用级"
-            "语言或格式限制；各张不要求使用同一种语言或结构。"
+            "创作一个紧凑但丰富的编辑式微文案系统，而不是只写一句泛泛短语。每张使用 2-4 个"
+            "文字层级，可从场景主词或关键词序列、具体观察句、双语回声、真实日期或简短地点中"
+            "组合；用换行明确层级。只有 photos 或 trip 已提供的日期地点才可作为事实小字，"
+            "不得虚构坐标、天气、编号或引语。保留上游支持的语言模式、标点和分隔符；相邻图片"
+            "应变化语言组合、句式和内容结构，避免反复使用 Gathered、Journey、Memory 等空泛词。"
         ),
-        story_caption_example="遵循上游 Micro-Text System 的单行或多行文字",
+        story_caption_example=(
+            "RAIN / STONE / RETURN\n雨停以后，石阶先亮起来"
+        ),
         story_caption_excerpts=(("## Micro-Text System", "## Prompt Shape"),),
         runtime_rules="""
 Canvas and attention geometry:
@@ -93,7 +98,8 @@ Photo-to-paper handoff and color:
 - The hue must change balance, eye path, figure-ground, or meaning. Use risograph ink, opaque cut paper, flat silhouette, dry print, or translucent halftone. Do not add a detached decorative dot or rectangle.
 
 Typography and reproduction:
-- Treat the supplied caption block as the exact readable text content. Preserve its languages, punctuation, separators, and line breaks without translating, rewriting, or flattening its hierarchy. Apply the upstream language mode and keep the complete text system quiet, legible, subordinate, and integrated as handwriting, typewriter, letterpress, faint pencil, worn stamp, or dry ink in a quiet paper area.
+- Treat the supplied caption block as the exact readable text content. Preserve its languages, punctuation, separators, and line breaks without translating or rewriting. Read its lines as editorial roles rather than one flat caption: establish one quiet primary line, one smaller observational or bilingual echo, and optional factual microtext when present.
+- Use at most two compatible lettering materials on one page, selected from imperfect handwriting, restrained Song-style print, typewriter-like letterpress, faint pencil, worn stamp, or dry ink. Vary scale, alignment, orientation, and proximity to the torn edge according to the page-specific typography recipe. Keep every line legible and clearly subordinate to the photograph and illustration.
 - Warm cream aged paper, matte fibers, restrained grain, xerox/risograph/letterpress wear, diffuse light, natural photographic color, no artificial depth.
 - Avoid clean digital clipping, full-scene tracing, dense scrapbooking, generic decoration, multiple bright hues, logos, CTA, glossy mockups, neon, 3D, cinematic lighting, cute cartoon/anime, large display type, invented text beyond the supplied caption block, and watermarks.
 """.strip(),
@@ -113,10 +119,16 @@ Typography and reproduction:
         generation_noun="极简纸刊页",
         story_caption_requirement=(
             "captions 是写进生成图片内部的文字内容。逐张依据 upstream_image_text_rules "
-            "创作，保留上游支持的语言、日期或其他文字元素、标点和多行层级，不要附加"
-            "应用级语言或格式限制；各张不要求使用同一种语言或结构。"
+            "创作让文字本身参与构图的微型编辑文案，而不是每张只给一个相似短句。每张使用 2-4 个"
+            "文字层级：一个可被放大的核心词或诗性短句，加一个更小的补充片段，并可加入真实日期、"
+            "简短地点或从画面提炼的物件词。用换行表达层级，可使用中英单语、双语、碎片词或档案式"
+            "结构；只有 photos 或 trip 已提供的日期地点才可写成事实小字，不得虚构天气、坐标、编号"
+            "或署名。相邻图片必须轮换语言组合、长短节奏和结构，避免反复使用 Journey、Memory、"
+            "沿途、微光等万能词。"
         ),
-        story_caption_example="遵循上游 Typography System 的单行或多行文字",
+        story_caption_example=(
+            "风从窄巷经过\nA TURN IN THE ROAD"
+        ),
         story_caption_excerpts=(
             ("5. **Typography System:**", "6. **Color Logic:**"),
             ("### Typography Mode", "### Texture Mode"),
@@ -132,7 +144,8 @@ Canvas and attention geometry:
 Image anchor and typography:
 - Reduce the source to one object, small photo fragment, specimen, cutout, silhouette, old printed illustration, texture window, or compact conceptual relation.
 - Treat it with photocopy softness, torn paper, halftone, scanline, risograph grain, xerox wear, ink bleed, or slight misregistration.
-- Treat the supplied caption block as the exact readable text content. Preserve its languages, punctuation, metadata-like elements, fragments, and line breaks without translating, rewriting, or flattening its hierarchy. Choose an upstream typography mode such as small serif, typewriter, monospaced, letterpress, fragmented letters, archive microtext, or lightly imperfect handwriting, and keep the treatment integrated with the visual cluster.
+- Treat the supplied caption block as the exact readable text content. Preserve its languages, punctuation, metadata-like elements, fragments, and line breaks without translating or rewriting. Interpret the lines as separate typographic roles: one primary phrase or word, one supporting fragment, and optional factual microtext.
+- Give the page one deliberate typography event from the page-specific recipe: fragmented letters, a phrase pressed to the image edge, an archive microtext stack, a vertical text rail, low-contrast ghost text, rough letterpress display type, or type inside the color form. Pair it with at most one quieter serif, typewriter, monospaced, or handwritten support face. Text may lead the small visual cluster, but must stay tactile, legible, and non-commercial.
 
 Color and reproduction:
 - Use paper tones plus gray/black and exactly one unmistakable high-chroma anchor visible at thumbnail size. The saturated hue should occupy about 0.8%-2.5% of the poster or 15%-35% of the visual cluster.
