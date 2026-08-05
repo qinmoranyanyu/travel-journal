@@ -390,13 +390,19 @@ def _build_image_prompt(
         variation = _minimal_zine_variation(photo.id)
         typography = _zine_typography_variation(photo.id, image_style)
         direction = (
-            "Create one vertical 3:5 minimal zine poster. Recompose the source radically, but "
+            "Use Standard Mode to create one vertical 3:5 minimal zine poster. Recompose the "
+            "source radically around one central imageable idea, but "
             "retain at least one clearly recognizable source-derived subject, silhouette, or "
             "spatial cue. Use one small visual cluster and 70%-90% aged-paper negative space. "
             "Keep all important content within the central 90% of the canvas for final 3:5 "
             "cropping.\n"
             f"{common}"
-            f"Variation recipe for this page: {variation}.\n"
+            f"Variation recipe for this page: {variation}. Treat this as one combined recipe. "
+            "The named high-chroma hue must color the selected source-derived anchor itself or "
+            "a substantial cutout, block, partial-color region, or bold type associated with it. "
+            "It must occupy 15%-35% of the visual cluster, remain unmistakable at thumbnail "
+            "size, and never collapse into a detached dot, hairline, registration tick, pale "
+            "wash, or muted accent. The final image must not be monochrome or near-monochrome.\n"
             f"Page-specific typography recipe: {typography}. "
             "Use the caption's line breaks as distinct editorial roles, with one memorable "
             "typographic event and quieter supporting text; do not collapse them into one "
@@ -417,17 +423,23 @@ def _build_image_prompt(
 
 def _minimal_zine_variation(photo_id: str) -> str:
     layouts = (
+        "tiny center fragment with abundant surrounding paper",
         "lower-left floating cluster with open upper paper",
         "small upper-right block with loose text drift",
-        "two adjacent fragments with a narrow gap",
-        "single isolated central specimen",
+        "two small overlapping or adjacent panels with a narrow gap",
         "irregular source-derived cutout off center",
+        "type-led composition with a recognizable source fragment kept secondary",
+        "sparse orbit of dots, letters, or hairlines around a small source-derived subject",
+        "single isolated central specimen with almost no support graphics",
     )
     anchors = (
+        "tiny faded source photo",
         "torn-paper clipping",
         "flat source-derived silhouette",
+        "solid high-chroma block shaped from a source cue",
         "old printed illustration",
-        "small faded source fragment",
+        "isolated source-derived object specimen",
+        "translucent geometric overlay preserving a source relationship",
         "abstract texture window preserving one source cue",
     )
     textures = (
@@ -435,22 +447,41 @@ def _minimal_zine_variation(photo_id: str) -> str:
         "risograph grain",
         "letterpress ink bleed",
         "halftone degradation",
+        "film-grain photo texture",
         "scan noise and paper fibers",
+        "aged-paper mottling",
+        "soft motion blur applied only to selected text",
+    )
+    moods = (
+        "quiet",
+        "summer",
+        "solitude",
+        "childhood",
+        "seaside",
+        "afternoon",
+        "night",
+        "memory",
+        "slight surrealism",
     )
     colors = (
-        "fully saturated cobalt-blue ink",
-        "clean tomato-red printed shape",
-        "vivid pear-green cut paper",
-        "lemon-yellow dry-print field",
-        "saturated magenta-pink silhouette",
+        "fully saturated cobalt-blue risograph ink carried by the selected anchor",
+        "opaque ultramarine cutout carried by the selected anchor",
+        "vivid cyan flat print carried by the selected anchor",
+        "fully saturated violet printed block carried by the selected anchor",
+        "opaque saturated magenta-pink silhouette carried by the selected anchor",
+        "fully saturated lemon-yellow dry-print field carried by the selected anchor",
+        "vivid pear-green cut paper carried by the selected anchor",
+        "opaque saturated orange print carried by the selected anchor",
+        "opaque tomato-red printed shape carried by the selected anchor",
     )
     digest = hashlib.sha256(photo_id.encode("utf-8")).digest()
-    return ", ".join(
+    return "; ".join(
         (
-            layouts[digest[0] % len(layouts)],
-            anchors[digest[1] % len(anchors)],
-            textures[digest[2] % len(textures)],
-            colors[digest[3] % len(colors)],
+            f"layout: {layouts[digest[0] % len(layouts)]}",
+            f"image anchor: {anchors[digest[1] % len(anchors)]}",
+            f"texture: {textures[digest[2] % len(textures)]}",
+            f"mood: {moods[digest[3] % len(moods)]}",
+            f"high-chroma color: {colors[digest[4] % len(colors)]}",
         )
     )
 
@@ -466,11 +497,14 @@ def _zine_typography_variation(photo_id: str, image_style: ImageStyle) -> str:
         )
     else:
         recipes = (
-            "fragmented rough-letterpress primary words within the visual cluster, paired with a tiny monospaced archive stack",
+            "fragmented floating rough-letterpress primary words within the visual cluster, paired with a tiny monospaced support line",
             "one short serif phrase pressed against the image edge, with a faint handwritten fragment drifting into open paper",
-            "a slim vertical typewriter rail beside the subject, balanced by one low-contrast horizontal ghost line",
-            "a compact date-or-place microtext block above the anchor, with the primary phrase printed inside the high-chroma form",
-            "one restrained type-led composition using a large cropped word, supported by tiny widely spaced letterpress text",
+            "a compact archive microtext stack using only supplied factual date or place text, set above the anchor with a restrained primary phrase",
+            "diagonally scattered words with one readable primary phrase and quieter fragments kept inside the visual cluster",
+            "one readable primary phrase balanced by low-contrast gray ghost text, without weakening the high-chroma visual anchor",
+            "headline-as-object using rough letterpress display type, with the recognizable source cue kept secondary",
+            "the primary phrase printed inside the high-chroma block or cutout, with one tiny monospaced support line",
+            "an almost-textless hierarchy that keeps every supplied line tiny but readable, with only one quiet caption acting as the visible lead",
         )
     digest = hashlib.sha256(f"{image_style.value}:{photo_id}".encode("utf-8")).digest()
     return recipes[digest[0] % len(recipes)]

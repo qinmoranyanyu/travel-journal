@@ -58,6 +58,9 @@ def test_upstream_skills_are_compiled_to_pixel_level_prompt_rules():
     assert "70%-90% plain paper" in minimal
     assert "one deliberate typography event" in minimal
     assert "vertical text rail" in minimal
+    assert "must not be monochrome or near-monochrome" in minimal
+    assert "detached dot, hairline, registration tick" in minimal
+    assert "15%-35% of the visual cluster" in minimal
     assert "supplied Chinese phrase" not in minimal
     assert "## Output Format" not in minimal
     assert len(minimal) < 5_000

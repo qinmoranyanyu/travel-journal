@@ -136,22 +136,28 @@ Typography and reproduction:
             ("4. Write the final image prompt.", "5. Generate the image."),
         ),
         runtime_rules="""
+Standard Mode visual target:
+- Create a poetic minimal paper poster with huge negative space, one small source-derived cluster, sparse experimental type, old-print defects, and one clear high-chroma anchor.
+- Compile only visible design decisions. Keep the result quiet, tactile, editorial, and recognizably derived from the supplied source image.
+
 Canvas and attention geometry:
 - One vertical 3:5 phone-poster, full-frame aged matte paper, flat orthographic scan, no border or mockup.
 - Keep 70%-90% plain paper and one source-derived visual cluster occupying about 8%-25%, away from the edges.
-- Recompose freely but preserve at least one recognizable source subject, silhouette, fragment, or spatial cue.
+- Recompose freely around one central imageable idea or visual metaphor, while preserving at least one recognizable source subject, silhouette, fragment, or spatial cue. Do not summarize or redraw the whole scene.
 
 Image anchor and typography:
 - Reduce the source to one object, small photo fragment, specimen, cutout, silhouette, old printed illustration, texture window, or compact conceptual relation.
-- Treat it with photocopy softness, torn paper, halftone, scanline, risograph grain, xerox wear, ink bleed, or slight misregistration.
+- Treat grayscale photos, paper fragments, and secondary marks with photocopy softness, torn paper, halftone, scanline, risograph grain, xerox wear, ink bleed, or slight misregistration. Never apply low saturation or low contrast to the selected color anchor.
 - Treat the supplied caption block as the exact readable text content. Preserve its languages, punctuation, metadata-like elements, fragments, and line breaks without translating or rewriting. Interpret the lines as separate typographic roles: one primary phrase or word, one supporting fragment, and optional factual microtext.
 - Give the page one deliberate typography event from the page-specific recipe: fragmented letters, a phrase pressed to the image edge, an archive microtext stack, a vertical text rail, low-contrast ghost text, rough letterpress display type, or type inside the color form. Pair it with at most one quieter serif, typewriter, monospaced, or handwritten support face. Text may lead the small visual cluster, but must stay tactile, legible, and non-commercial.
 
 Color and reproduction:
-- Use paper tones plus gray/black and exactly one unmistakable high-chroma anchor visible at thumbnail size. The saturated hue should occupy about 0.8%-2.5% of the poster or 15%-35% of the visual cluster.
-- The color may be the source-derived subject, flat silhouette, irregular cutout, printed block, partial-color photo region, or fragmented type. Keep it saturated through grain and ink defects.
-- Diffuse light, low-to-medium contrast on paper and grayscale elements, matte absorbent fibers, quiet poetic Japanese/Korean indie-zine or minimal editorial mood.
-- Avoid full-bleed scenes, commercial headlines, product-ad layouts, logos, CTA, clean UI white, glossy paper shadows, cinematic lighting, depth of field, 3D, neon, cute cartoon/anime, fashion drama, dense scrapbooks, many colors, long text, and watermarks.
+- Paper tones and subdued gray/black elements must support one unmistakable, opaque, high-chroma main anchor that remains clearly visible at thumbnail size. A tiny secondary hue is allowed only when it supports the subject without competing with the main hue.
+- The saturated main hue must occupy about 0.8%-2.5% of the whole poster or 15%-35% of the visual cluster. Apply the exact hue and material named in the page-specific variation recipe.
+- Prefer making the source-derived subject, flat silhouette, irregular cutout, substantial printed block, partial-color photo region, or bold fragmented type carry the color itself. Never reduce the color automatically to a detached dot, hairline, registration tick, or other imperceptible accent.
+- Preserve full saturation through grain, halftone, ink bleed, and misregistration. The final poster must not be monochrome or near-monochrome. Do not weaken the main anchor with pale, muted, faded, pastel, or low-saturation treatment.
+- Use diffuse light, low-to-medium contrast only on paper and grayscale elements, matte absorbent fibers, a flat scanned-paper appearance, and the quiet poetic emotional temperature named in the page recipe.
+- Avoid full-bleed scenes, commercial headlines, product-ad layouts, logos, CTA, brand-campaign styling, clean UI white, glossy paper mockups, heavy or hard shadows, cinematic lighting, depth of field, 3D, neon, cyberpunk, cute cartoon/kawaii/anime, fashion drama, high-resolution stock-photo realism, dense scrapbooks, stickers, too many objects or colors, long clean text blocks, generic templates, and watermarks.
 """.strip(),
     ),
 }

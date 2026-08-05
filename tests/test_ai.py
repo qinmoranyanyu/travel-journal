@@ -5,7 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.ai import OpenAIService, _fallback_image_caption, _fallback_poem_lines
+from app.ai import (
+    OpenAIService,
+    _fallback_image_caption,
+    _fallback_poem_lines,
+    _minimal_zine_variation,
+    _zine_typography_variation,
+)
 from app.media import MediaPhoto
 from app.models import ImageAnalysis, ImageStyle, NearbyLandmark, PhotoLocation
 
@@ -174,6 +180,40 @@ def test_minimal_zine_prompt_assigns_distinct_typographic_roles(tmp_path):
     assert f"<caption>\n{caption}\n</caption>" in prompt
     assert "Page-specific typography recipe:" in prompt
     assert "one memorable typographic event" in prompt
+    assert "Treat this as one combined recipe" in prompt
+    assert "The final image must not be monochrome or near-monochrome" in prompt
+    assert "layout:" in prompt
+    assert "image anchor:" in prompt
+    assert "texture:" in prompt
+    assert "mood:" in prompt
+    assert "high-chroma color:" in prompt
+
+
+def test_minimal_zine_variation_exposes_every_skill_axis_and_option():
+    recipes = []
+    typography_recipes = set()
+    for index in range(2_048):
+        photo_id = f"photo-{index:05d}"
+        recipe = dict(
+            field.split(": ", 1)
+            for field in _minimal_zine_variation(photo_id).split("; ")
+        )
+        recipes.append(recipe)
+        typography_recipes.add(
+            _zine_typography_variation(photo_id, ImageStyle.minimal_zine)
+        )
+
+    assert all(
+        set(recipe)
+        == {"layout", "image anchor", "texture", "mood", "high-chroma color"}
+        for recipe in recipes
+    )
+    assert len({recipe["layout"] for recipe in recipes}) == 8
+    assert len({recipe["image anchor"] for recipe in recipes}) == 8
+    assert len({recipe["texture"] for recipe in recipes}) == 8
+    assert len({recipe["mood"] for recipe in recipes}) == 9
+    assert len({recipe["high-chroma color"] for recipe in recipes}) == 9
+    assert len(typography_recipes) == 8
 
 
 def test_location_metadata_is_separated_and_nearby_wording_is_constrained(tmp_path):
